@@ -1,5 +1,4 @@
 use crate::{
-    constants::trade::trade::DEFAULT_SLIPPAGE,
     instruction::utils::raydium_amm_v4::{accounts, SWAP_BASE_IN_DISCRIMINATOR},
     trading::core::{
         params::{RaydiumAmmV4Params, SwapParams},

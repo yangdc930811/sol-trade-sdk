@@ -66,3 +66,5 @@ pub const MEMO_PROGRAM_META: solana_sdk::instruction::AccountMeta =
         is_signer: false,
         is_writable: false,
     };
+
+pub const CLOCK_PROGRAM: Pubkey = pubkey!("SysvarC1ock11111111111111111111111111111111");

@@ -3,7 +3,8 @@ use crate::{
 };
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
-use solana_streamer::streaming::event_parser::protocols::raydium_amm_v4::types::{amm_info_decode, AmmInfo};
+use sol_common::protocols::raydium_amm_v4::AmmInfo;
+use solana_streamer::streaming::event_parser::protocols::raydium_amm_v4::types::{amm_info_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {

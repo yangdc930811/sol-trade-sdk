@@ -4,7 +4,8 @@ use crate::{
 };
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
-use solana_streamer::streaming::event_parser::protocols::raydium_cpmm::types::{pool_state_decode, PoolState};
+use sol_common::protocols::raydium_cpmm::PoolState;
+use solana_streamer::streaming::event_parser::protocols::raydium_cpmm::types::{pool_state_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {

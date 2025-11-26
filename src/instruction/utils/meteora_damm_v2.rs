@@ -3,7 +3,8 @@ use crate::{
 };
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
-use solana_streamer::streaming::event_parser::protocols::meteora_damm_v2::types::{pool_decode, Pool};
+use sol_common::protocols::meteora_damm_v2::types::Pool;
+use solana_streamer::streaming::event_parser::protocols::meteora_damm_v2::types::{pool_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {

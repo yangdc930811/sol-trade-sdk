@@ -1,8 +1,8 @@
 use solana_sdk::pubkey::Pubkey;
-use solana_streamer::streaming::event_parser::protocols::raydium_clmm::parser::RAYDIUM_CLMM_PROGRAM_ID;
-use solana_streamer::streaming::event_parser::protocols::raydium_clmm::states::pool::{PoolState, POOL_TICK_ARRAY_BITMAP_SEED};
-use solana_streamer::streaming::event_parser::protocols::raydium_clmm::states::tick_array::TICK_ARRAY_SEED;
-use solana_streamer::streaming::event_parser::protocols::raydium_clmm::states::tickarray_bitmap_extension::TickArrayBitmapExtension;
+use sol_common::common::constants::RAYDIUM_CLMM_PROGRAM_ID;
+use sol_common::protocols::raydium_clmm::states::pool::{PoolState, POOL_TICK_ARRAY_BITMAP_SEED};
+use sol_common::protocols::raydium_clmm::states::tick_array::TICK_ARRAY_SEED;
+use sol_common::protocols::raydium_clmm::states::tickarray_bitmap_extension::TickArrayBitmapExtension;
 use crate::common::fast_fn::{get_cached_pda, PdaCacheKey};
 
 pub const SWAP_DISCRIMINATOR: &[u8] = &[43, 4, 237, 11, 26, 201, 30, 98];

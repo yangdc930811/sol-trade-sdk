@@ -1,12 +1,11 @@
 use anyhow::anyhow;
 use solana_program::instruction::{AccountMeta, Instruction};
-use solana_program::pubkey::Pubkey;
 use solana_sdk::signature::Signer;
-use solana_streamer::streaming::event_parser::protocols::meteora_dlmm::parser::METEORA_DLMM_PROGRAM_ID;
+use sol_common::common::constants::METEORA_DLMM_PROGRAM_ID;
 use crate::common::{AnyResult, GasFeeStrategy};
 use crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed;
-use crate::instruction::utils::meteora_dlmm::meteora_dlmm::accounts::EVENT_AUTHORITY_META;
-use crate::instruction::utils::meteora_dlmm::meteora_dlmm::SWAP_DISCRIMINATOR;
+use crate::instruction::utils::meteora_dlmm::accounts::EVENT_AUTHORITY_META;
+use crate::instruction::utils::meteora_dlmm::SWAP_DISCRIMINATOR;
 use crate::trading::{InstructionBuilder, SwapParams};
 use crate::trading::core::params::{MeteoraDlmmParams};
 

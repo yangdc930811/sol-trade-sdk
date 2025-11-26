@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use solana_program::instruction::{AccountMeta, Instruction};
 use solana_sdk::signature::Signer;
-use solana_streamer::streaming::event_parser::protocols::raydium_clmm::parser::RAYDIUM_CLMM_PROGRAM_ID;
+use sol_common::common::constants::RAYDIUM_CLMM_PROGRAM_ID;
 use crate::common::{AnyResult, GasFeeStrategy};
 use crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed;
 use crate::constants::{MEMO_PROGRAM_META, TOKEN_PROGRAM, TOKEN_PROGRAM_2022_META, TOKEN_PROGRAM_META};

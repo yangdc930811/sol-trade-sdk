@@ -2,13 +2,17 @@ use core::result::Result::Ok;
 use solana_sdk::{account::Account, clock::Clock};
 use std::collections::HashMap;
 use anyhow::{ensure, Context};
-use solana_streamer::streaming::event_parser::protocols::meteora_dlmm::types::LbPair;
-use crate::instruction::utils::meteora_dlmm::extensions::{ActivationType, Bin, BinArray, BinArrayBitmapExtExtension, BinArrayBitmapExtension, BinArrayExtension, BinExtension, LbPairExtension, PairStatus, PairType};
-use crate::instruction::utils::meteora_dlmm::pda::{derive_bin_array_pda, derive_bin_array_pda_from_cache};
-use crate::instruction::utils::meteora_dlmm::typedefs::SwapResult;
 use anyhow::Result;
+use futures_util::task::Spawn;
 use solana_sdk::pubkey::Pubkey;
-use crate::instruction::utils::meteora_dlmm::token_2022::{calculate_transfer_fee_excluded_amount, calculate_transfer_fee_included_amount};
+use sol_common::common::constants::METEORA_DLMM_PROGRAM_ID;
+use sol_common::protocols::meteora_dlmm::extensions::{ActivationType, Bin, BinArray, BinArrayBitmapExtExtension, BinArrayBitmapExtension, BinArrayExtension, BinExtension, LbPairExtension, PairStatus, PairType};
+use sol_common::protocols::meteora_dlmm::seeds::BIN_ARRAY;
+use sol_common::protocols::meteora_dlmm::token_2022::{calculate_transfer_fee_excluded_amount, calculate_transfer_fee_included_amount};
+use sol_common::protocols::meteora_dlmm::typedefs::SwapResult;
+use sol_common::protocols::meteora_dlmm::types::LbPair;
+use crate::common::fast_fn::{get_cached_pda, PdaCacheKey};
+use crate::instruction::utils::meteora_dlmm::derive_bin_array_pda_from_cache;
 
 #[derive(Debug)]
 pub struct SwapExactInQuote {

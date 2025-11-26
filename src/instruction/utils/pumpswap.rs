@@ -7,7 +7,8 @@ use crate::{
 use anyhow::anyhow;
 use solana_account_decoder::UiAccountEncoding;
 use solana_sdk::pubkey::Pubkey;
-use solana_streamer::streaming::event_parser::protocols::pumpswap::types::{pool_decode, Pool};
+use sol_common::protocols::pumpswap::Pool;
+use solana_streamer::streaming::event_parser::protocols::pumpswap::types::pool_decode;
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {

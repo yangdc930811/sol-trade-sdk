@@ -3,7 +3,8 @@ use crate::{
 };
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
-use solana_streamer::streaming::event_parser::protocols::bonk::{pool_state_decode, PoolState};
+use sol_common::protocols::bonk::PoolState;
+use solana_streamer::streaming::event_parser::protocols::bonk::{pool_state_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {

@@ -1,11 +1,9 @@
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
-use solana_streamer::streaming::event_parser::protocols::meteora_dlmm::parser::METEORA_DLMM_PROGRAM_ID;
-use solana_streamer::streaming::event_parser::protocols::orca::parser::ORCA_PROGRAM_ID;
-use solana_streamer::streaming::event_parser::protocols::orca::types::Whirlpool;
+use sol_common::common::constants::ORCA_PROGRAM_ID;
+use sol_common::protocols::orca::Whirlpool;
 use crate::common::AnyResult;
 use crate::common::fast_fn::{get_cached_pda, PdaCacheKey};
-use crate::instruction::utils::meteora_dlmm::seeds::BIN_ARRAY_BITMAP_SEED;
 use crate::instruction::utils::orca::seeds::ORACLE_SEED;
 
 pub const SWAP_DISCRIMINATOR: &[u8] = &[0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];

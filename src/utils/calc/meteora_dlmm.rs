@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use anyhow::{ensure, Context};
 use anyhow::Result;
 use futures_util::task::Spawn;
+use num_integer::Integer;
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use sol_common::common::constants::METEORA_DLMM_PROGRAM_ID;
 use sol_common::protocols::meteora_dlmm::extensions::{ActivationType, Bin, BinArray, BinArrayBitmapExtExtension, BinArrayBitmapExtension, BinArrayExtension, BinExtension, LbPairExtension, PairStatus, PairType};
@@ -24,6 +26,13 @@ pub struct SwapExactInQuote {
 pub struct SwapExactOutQuote {
     pub amount_in: u64,
     pub fee: u64,
+}
+
+pub struct SwapQuoteAccounts {
+    pub mint_x_account: Account,
+    pub mint_y_account: Account,
+    pub bin_arrays: HashMap<Pubkey, BinArray>,
+    pub bin_array_keys: Vec<Pubkey>,
 }
 
 fn validate_swap_activation(
@@ -309,4 +318,65 @@ pub fn get_bin_array_pubkeys_for_swap(
         .collect();
 
     Ok(bin_array_pubkeys)
+}
+
+pub async fn fetch_quote_required_accounts(
+    rpc_client: &RpcClient,
+    lb_pair_state: &LbPair,
+    bin_arrays_for_swap: Vec<Pubkey>,
+) -> Result<SwapQuoteAccounts> {
+    let prerequisite_accounts = [
+        lb_pair_state.token_x_mint,
+        lb_pair_state.token_y_mint,
+    ];
+
+    let accounts_to_fetch = [prerequisite_accounts.to_vec(), bin_arrays_for_swap.clone()].concat();
+
+    let accounts = rpc_client.get_multiple_accounts(&accounts_to_fetch).await?;
+
+    let mut index = 0;
+    let mint_x_account = accounts
+        .get(index)
+        .and_then(ToOwned::to_owned)
+        .context("Failed to fetch mint account")?;
+
+    index.inc();
+    let mint_y_account = accounts
+        .get(index)
+        .and_then(ToOwned::to_owned)
+        .context("Failed to fetch mint account")?;
+
+    let bin_array_accounts = accounts
+        .get(prerequisite_accounts.len()..)
+        .context("Failed to fetch bin array accounts")?
+        .to_vec();
+
+    let valid_bin_array_accounts = bin_array_accounts
+        .into_iter()
+        .zip(bin_arrays_for_swap.iter())
+        .filter_map(|(account, &key)| {
+            let account = account?;
+            Some((
+                key,
+                bincode::deserialize::<BinArray>(&account.data[8..]).ok()?,  // 跳过前面8个字节
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    let bin_arrays = valid_bin_array_accounts
+        .clone()
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+
+    let bin_array_keys = valid_bin_array_accounts
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect::<Vec<_>>();
+
+    Ok(SwapQuoteAccounts {
+        mint_x_account,
+        mint_y_account,
+        bin_arrays,
+        bin_array_keys,
+    })
 }

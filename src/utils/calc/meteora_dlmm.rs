@@ -1,4 +1,3 @@
-use crate::*;
 use core::result::Result::Ok;
 use solana_sdk::{account::Account, clock::Clock};
 use std::collections::HashMap;
@@ -8,6 +7,8 @@ use crate::instruction::utils::meteora_dlmm::extensions::{ActivationType, Bin, B
 use crate::instruction::utils::meteora_dlmm::pda::{derive_bin_array_pda, derive_bin_array_pda_from_cache};
 use crate::instruction::utils::meteora_dlmm::typedefs::SwapResult;
 use anyhow::Result;
+use solana_sdk::pubkey::Pubkey;
+use crate::instruction::utils::meteora_dlmm::token_2022::{calculate_transfer_fee_excluded_amount, calculate_transfer_fee_included_amount};
 
 #[derive(Debug)]
 pub struct SwapExactInQuote {
@@ -48,28 +49,6 @@ fn validate_swap_activation(
     Ok(())
 }
 
-fn shift_active_bin_if_empty_gap(
-    lb_pair: &mut LbPair,
-    active_bin_array: &BinArray,
-    swap_for_y: bool,
-) -> Result<()> {
-    let lb_pair_bin_array_index = BinArray::bin_id_to_bin_array_index(lb_pair.active_id)?;
-
-    if i64::from(lb_pair_bin_array_index) != active_bin_array.index {
-        if swap_for_y {
-            let (_, upper_bin_id) =
-                BinArray::get_bin_array_lower_upper_bin_id(active_bin_array.index as i32)?;
-            lb_pair.active_id = upper_bin_id;
-        } else {
-            let (lower_bin_id, _) =
-                BinArray::get_bin_array_lower_upper_bin_id(active_bin_array.index as i32)?;
-            lb_pair.active_id = lower_bin_id;
-        }
-    }
-
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn quote_exact_out(
     lb_pair_pubkey: Pubkey,
@@ -100,6 +79,9 @@ pub fn quote_exact_out(
         (mint_y_account, mint_x_account)
     };
 
+    amount_out =
+        calculate_transfer_fee_included_amount(out_mint_account, amount_out, epoch)?.amount;
+
     while amount_out > 0 {
         let active_bin_array_pubkey = get_bin_array_pubkeys_for_swap(
             lb_pair_pubkey,
@@ -115,8 +97,6 @@ pub fn quote_exact_out(
             .get(&active_bin_array_pubkey)
             .cloned()
             .context("Active bin array not found")?;
-
-        shift_active_bin_if_empty_gap(&mut lb_pair, &active_bin_array, swap_for_y)?;
 
         loop {
             if !active_bin_array.is_bin_id_within_range(lb_pair.active_id)? || amount_out == 0 {
@@ -167,6 +147,9 @@ pub fn quote_exact_out(
         .checked_add(total_fee)
         .context("MathOverflow")?;
 
+    total_amount_in =
+        calculate_transfer_fee_included_amount(in_mint_account, total_amount_in, epoch)?.amount;
+
     Ok(SwapExactOutQuote {
         amount_in: total_amount_in,
         fee: total_fee,
@@ -203,7 +186,10 @@ pub fn quote_exact_in(
         (mint_y_account, mint_x_account)
     };
 
-    let mut amount_left = amount_in;
+    let transfer_fee_excluded_amount_in =
+        calculate_transfer_fee_excluded_amount(in_mint_account, amount_in, epoch)?.amount;
+
+    let mut amount_left = transfer_fee_excluded_amount_in;
 
     while amount_left > 0 {
         let active_bin_array_pubkey = get_bin_array_pubkeys_for_swap(
@@ -220,8 +206,6 @@ pub fn quote_exact_in(
             .get(&active_bin_array_pubkey)
             .cloned()
             .context("Active bin array not found")?;
-
-        shift_active_bin_if_empty_gap(&mut lb_pair, &active_bin_array, swap_for_y)?;
 
         loop {
             if !active_bin_array.is_bin_id_within_range(lb_pair.active_id)? || amount_left == 0 {
@@ -257,8 +241,11 @@ pub fn quote_exact_in(
         }
     }
 
+    let transfer_fee_excluded_amount_out =
+        calculate_transfer_fee_excluded_amount(out_mint_account, total_amount_out, epoch)?.amount;
+
     Ok(SwapExactInQuote {
-        amount_out: total_amount_out,
+        amount_out: transfer_fee_excluded_amount_out,
         fee: total_fee,
     })
 }

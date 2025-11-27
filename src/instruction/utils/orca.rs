@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
 use sol_common::common::constants::ORCA_PROGRAM_ID;
-use sol_common::protocols::orca::Whirlpool;
+use sol_common::protocols::orca::types::Whirlpool;
 use crate::common::AnyResult;
 use crate::common::fast_fn::{get_cached_pda, PdaCacheKey};
 use crate::instruction::utils::orca::seeds::ORACLE_SEED;
@@ -15,7 +15,7 @@ pub mod seeds {
 }
 
 pub async fn fetch_tick_arrays_or_default(
-    whirlpool_address: Pubkey,
+    whirlpool_address: &Pubkey,
     whirlpool: &Whirlpool,
 ) -> AnyResult<Vec<Pubkey>> {
     let tick_array_start_index =
@@ -32,8 +32,8 @@ pub async fn fetch_tick_arrays_or_default(
 
     let tick_array_addresses: Vec<Pubkey> = tick_array_indexes
         .iter()
-        .map(|&x| get_tick_array_address(&whirlpool_address, x).map(|y| y.0))
-        .collect::<Result<Vec<Pubkey>, _>>()?;
+        .filter_map(|&x| get_tick_array_address_from_cache(whirlpool_address, x))
+        .collect();
 
     Ok(tick_array_addresses)
 }
@@ -47,24 +47,29 @@ fn get_tick_array_start_tick_index(tick_index: i32, tick_spacing: u16) -> i32 {
     real_index * tick_spacing_i32 * tick_array_size_i32
 }
 
-fn get_tick_array_address(
+fn get_tick_array_address_from_cache(
     whirlpool: &Pubkey,
     start_tick_index: i32,
-) -> AnyResult<(Pubkey, u8)> {
-    let start_tick_index_str = start_tick_index.to_string();
-    let seeds = &[
-        b"tick_array",
-        whirlpool.as_ref(),
-        start_tick_index_str.as_bytes(),
-    ];
+) -> Option<Pubkey> {
+    get_cached_pda(
+        PdaCacheKey::OrcaTickArrayAddress(*whirlpool, start_tick_index), || {
+            let start_tick_index_str = start_tick_index.to_string();
+            let seeds = &[
+                b"tick_array",
+                whirlpool.as_ref(),
+                start_tick_index_str.as_bytes(),
+            ];
 
-    Pubkey::try_find_program_address(seeds, &ORCA_PROGRAM_ID).ok_or(anyhow!("get_tick_array_address failed"))
+            let program_id = &ORCA_PROGRAM_ID;
+            let pda: Option<(Pubkey, u8)> = Pubkey::try_find_program_address(seeds, program_id);
+            pda.map(|pubkey| pubkey.0)
+        },
+    )
 }
 
-pub fn get_oracle_pda(pool: &Pubkey) -> Option<Pubkey> {
+pub fn get_oracle_pda_from_cache(pool: &Pubkey) -> Option<Pubkey> {
     get_cached_pda(
-        PdaCacheKey::OrcaOracle(*pool),
-        || {
+        PdaCacheKey::OrcaOracle(*pool), || {
             let seeds: &[&[u8]; 2] = &[ORACLE_SEED, pool.as_ref()];
             let program_id = &ORCA_PROGRAM_ID;
             let pda: Option<(Pubkey, u8)> = Pubkey::try_find_program_address(seeds, program_id);

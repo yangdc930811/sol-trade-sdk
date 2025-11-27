@@ -149,6 +149,7 @@ pub enum PdaCacheKey {
     PumpSwapUserVolume(Pubkey),
     MeteoraDlmmBinArrayBitmapExtension(Pubkey),
     OrcaOracle(Pubkey),
+    OrcaTickArrayAddress(Pubkey, i32),
     RaydiumClmmTickArrayBitmapExtension(Pubkey),
     RaydiumClmmTickArray(Pubkey, i32),  // 获取交易时需要的额外key
     MeteoraDlmmBinArray(Pubkey, i64),  // 获取交易时需要的额外key

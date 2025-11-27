@@ -26,8 +26,8 @@ pub async fn fetch_tick_arrays_or_default(
         tick_array_start_index,
         tick_array_start_index + offset,
         tick_array_start_index + offset * 2,
-        // tick_array_start_index - offset,
-        // tick_array_start_index - offset * 2,
+        tick_array_start_index - offset,
+        tick_array_start_index - offset * 2,
     ];
 
     let tick_array_addresses: Vec<Pubkey> = tick_array_indexes
@@ -77,3 +77,4 @@ pub fn get_oracle_pda_from_cache(pool: &Pubkey) -> Option<Pubkey> {
         },
     )
 }
+

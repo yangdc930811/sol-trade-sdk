@@ -7,7 +7,7 @@ use crate::common::fast_fn::{get_cached_pda, PdaCacheKey};
 
 pub const SWAP_DISCRIMINATOR: &[u8] = &[43, 4, 237, 11, 26, 201, 30, 98];
 
-pub fn get_tick_array_bitmap_extension_pda(pool: &Pubkey) -> Option<Pubkey> {
+pub fn get_tick_array_bitmap_extension_pda_from_cache(pool: &Pubkey) -> Option<Pubkey> {
     get_cached_pda(
         PdaCacheKey::RaydiumClmmTickArrayBitmapExtension(*pool),
         || {
@@ -19,7 +19,7 @@ pub fn get_tick_array_bitmap_extension_pda(pool: &Pubkey) -> Option<Pubkey> {
     )
 }
 
-pub fn get_tick_array_pda(pool: &Pubkey, index: i32) -> Option<Pubkey> {
+pub fn get_tick_array_pda_from_cache(pool: &Pubkey, index: i32) -> Option<Pubkey> {
     get_cached_pda(
         PdaCacheKey::RaydiumClmmTickArray(*pool, index),
         || {
@@ -61,7 +61,7 @@ pub fn load_cur_and_next_five_tick_array(
         .get_first_initialized_tick_array(&mut Some(*tickarray_bitmap_extension), zero_for_one)
         .unwrap();
     let mut tick_array_keys = Vec::new();
-    tick_array_keys.push(get_tick_array_pda(pool_key, current_valid_tick_array_start_index).unwrap());
+    tick_array_keys.push(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
 
     let mut max_array_size = 5;
     while max_array_size != 0 {
@@ -76,7 +76,7 @@ pub fn load_cur_and_next_five_tick_array(
             break;
         }
         current_valid_tick_array_start_index = next_tick_array_index.unwrap();
-        tick_array_keys.push(get_tick_array_pda(pool_key, current_valid_tick_array_start_index).unwrap());
+        tick_array_keys.push(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
         max_array_size -= 1;
     }
     tick_array_keys

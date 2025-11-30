@@ -358,7 +358,7 @@ pub async fn fetch_quote_required_accounts(
             let account = account?;
             Some((
                 key,
-                bincode::deserialize::<BinArray>(&account.data[8..]).ok()?,  // 跳过前面8个字节
+                borsh::from_slice::<BinArray>(&account.data[8..]).ok()?,  // 跳过前面8个字节
             ))
         })
         .collect::<Vec<_>>();

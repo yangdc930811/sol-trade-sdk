@@ -1,6 +1,6 @@
 [package]
 name = "sol-trade-sdk"
-version = "3.3.5"
+version = "3.3.6"
 edition = "2021"
 authors = [
     "William <byteblock6@gmail.com>",
@@ -15,6 +15,10 @@ readme = "README.md"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+perf-trace = []  # 性能追踪特性，生产环境应禁用以获得最佳性能
 
 [dependencies]
 sol-common = { path = "../sol-common" }

@@ -87,23 +87,23 @@ git clone https://github.com/0xfnzero/sol-trade-sdk
 
 ```toml
 # 添加到您的 Cargo.toml
-sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.3.5" }
+sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.3.6" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-sol-trade-sdk = "3.3.5"
+sol-trade-sdk = "3.3.6"
 ```
 
 ## 🛠️ 使用示例
 
 ### 📋 使用示例
 
-#### 1. 创建 SolanaTrade 实例
+#### 1. 创建 TradingClient 实例
 
-可以参考 [示例：创建 SolanaTrade 实例](examples/trading_client/src/main.rs)。
+可以参考 [示例：创建 TradingClient 实例](examples/trading_client/src/main.rs)。
 
 ```rust
 // 钱包
@@ -134,8 +134,8 @@ let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment);
 //         true   // use_seed_optimize: 全局启用所有 ATA 操作的 seed 优化（默认: true）
 //     );
 
-// 创建 SolanaTrade 客户端
-let client = SolanaTrade::new(Arc::new(payer), trade_config).await;
+// 创建 TradingClient 客户端
+let client = TradingClient::new(Arc::new(payer), trade_config).await;
 ```
 
 #### 2. 配置 Gas Fee 策略
@@ -154,6 +154,9 @@ gas_fee_strategy.set_global_fee_strategy(150000,150000, 500000,500000, 0.001, 0.
 有关所有交易参数的详细信息，请参阅 [交易参数参考手册](docs/TRADING_PARAMETERS_CN.md)。
 
 ```rust
+// 导入 DexParamEnum 用于协议特定参数
+use sol_trade_sdk::trading::core::params::DexParamEnum;
+
 let buy_params = sol_trade_sdk::TradeBuyParams {
   dex_type: DexType::PumpSwap,
   input_token_type: TradeTokenType::WSOL,
@@ -161,14 +164,17 @@ let buy_params = sol_trade_sdk::TradeBuyParams {
   input_token_amount: buy_sol_amount,
   slippage_basis_points: slippage_basis_points,
   recent_blockhash: Some(recent_blockhash),
-  extension_params: Box::new(params.clone()),
+  // 使用 DexParamEnum 实现类型安全的协议参数（零开销抽象）
+  extension_params: DexParamEnum::PumpSwap(params.clone()),
   address_lookup_table_account: None,
   wait_transaction_confirmed: true,
   create_input_token_ata: true,
   close_input_token_ata: true,
   create_mint_ata: true,
   durable_nonce: None,
-  // 注意：seed 优化现在在 TradeConfig 中全局配置
+  fixed_output_token_amount: None,  // 可选：指定精确输出数量
+  gas_fee_strategy: gas_fee_strategy.clone(),  // Gas 费用策略配置
+  simulate: false,  // 设为 true 仅进行模拟
 };
 ```
 
@@ -191,7 +197,7 @@ client.buy(buy_params).await?;
 
 | 描述 | 运行命令 | 源码路径 |
 |------|---------|----------|
-| 创建和配置 SolanaTrade 实例 | `cargo run --package trading_client` | [examples/trading_client](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/trading_client/src/main.rs) |
+| 创建和配置 TradingClient 实例 | `cargo run --package trading_client` | [examples/trading_client](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/trading_client/src/main.rs) |
 | PumpFun 代币狙击交易 | `cargo run --package pumpfun_sniper_trading` | [examples/pumpfun_sniper_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpfun_sniper_trading/src/main.rs) |
 | PumpFun 代币跟单交易 | `cargo run --package pumpfun_copy_trading` | [examples/pumpfun_copy_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpfun_copy_trading/src/main.rs) |
 | PumpSwap 交易操作 | `cargo run --package pumpswap_trading` | [examples/pumpswap_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpswap_trading/src/main.rs) |

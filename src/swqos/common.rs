@@ -115,8 +115,17 @@ pub async fn poll_transaction_confirmation(
                 {
                     for log in logs {
                         if let Some(idx) = log.find("Error Message: ") {
-                            error_msg = log[idx + 15..].trim_end_matches('.').to_string();
-                            break;
+                            let msg = log[idx + 15..].trim_end_matches('.').to_string();
+                            if !error_msg.is_empty() {
+                                error_msg.push_str("; ");
+                            }
+                            error_msg.push_str(&msg);
+                        } else if let Some(idx) = log.find("Program log: Error: ") {
+                            let msg = log[idx + 20..].trim_end_matches('.').to_string();
+                            if !error_msg.is_empty() {
+                                error_msg.push_str("; ");
+                            }
+                            error_msg.push_str(&msg);
                         }
                     }
                 }
@@ -124,18 +133,32 @@ pub async fn poll_transaction_confirmation(
                 let ui_err = meta.err.unwrap();
                 let tx_err: TransactionError =
                     serde_json::from_value(serde_json::to_value(&ui_err)?)?;
-                let mut code = 500;
+                
+                // 直接使用Solana原生的InstructionError中的错误码
+                let mut code = 0u32;
                 let mut index = None;
                 match &tx_err {
                     TransactionError::InstructionError(i, i_error) => {
-                        match i_error {
-                            solana_sdk::instruction::InstructionError::Custom(c) => code = *c,
-                            _ => {}
-                        }
+                        // 直接匹配所有InstructionError类型，Custom也是其中之一
+                        code = match i_error {
+                            solana_sdk::instruction::InstructionError::Custom(c) => *c,
+                            solana_sdk::instruction::InstructionError::GenericError => 1,
+                            solana_sdk::instruction::InstructionError::InvalidArgument => 2,
+                            solana_sdk::instruction::InstructionError::InvalidInstructionData => 3,
+                            solana_sdk::instruction::InstructionError::InvalidAccountData => 4,
+                            solana_sdk::instruction::InstructionError::AccountDataTooSmall => 5,
+                            solana_sdk::instruction::InstructionError::InsufficientFunds => 6,
+                            solana_sdk::instruction::InstructionError::IncorrectProgramId => 7,
+                            solana_sdk::instruction::InstructionError::MissingRequiredSignature => 8,
+                            solana_sdk::instruction::InstructionError::AccountAlreadyInitialized => 9,
+                            solana_sdk::instruction::InstructionError::UninitializedAccount => 10,
+                            _ => 999, // 其他未知错误
+                        };
                         index = Some(*i);
                     }
                     _ => {}
                 }
+                
                 return Err(anyhow::Error::new(TradeError {
                     code: code,
                     message: format!("{} {:?}", tx_err, error_msg),

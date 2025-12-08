@@ -11,7 +11,7 @@ use crate::instruction::raydium_clmm::RaydiumClmmInstructionBuilder;
 use super::core::{executor::GenericTradeExecutor, traits::TradeExecutor};
 
 /// 支持的交易协议
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DexType {
     PumpFun,
     PumpSwap,

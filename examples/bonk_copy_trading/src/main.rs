@@ -3,12 +3,14 @@ use std::sync::{
     Arc,
 };
 
-use sol_trade_sdk::common::{spl_associated_token_account::get_associated_token_address, GasFeeStrategy};
 use sol_trade_sdk::common::TradeConfig;
+use sol_trade_sdk::common::{
+    fast_fn::get_associated_token_address_with_program_id_fast_use_seed, GasFeeStrategy,
+};
 use sol_trade_sdk::{
     common::AnyResult,
     swqos::SwqosConfig,
-    trading::{core::params::BonkParams, factory::DexType},
+    trading::{core::params::{BonkParams, DexParamEnum}, factory::DexType},
     SolanaTrade,
 };
 use solana_commitment_config::CommitmentConfig;
@@ -125,7 +127,16 @@ async fn bonk_copy_trade_with_grpc(trade_info: BonkTradeEvent) -> AnyResult<()> 
     let recent_blockhash = client.rpc.get_latest_blockhash().await?;
 
     let gas_fee_strategy = GasFeeStrategy::new();
-    gas_fee_strategy.set_global_fee_strategy(150000,150000, 500000,500000, 0.001, 0.001, 256 * 1024, 0);
+    gas_fee_strategy.set_global_fee_strategy(
+        150000,
+        150000,
+        500000,
+        500000,
+        0.001,
+        0.001,
+        256 * 1024,
+        0,
+    );
 
     // Buy tokens
     println!("Buying tokens from Bonk...");
@@ -143,7 +154,7 @@ async fn bonk_copy_trade_with_grpc(trade_info: BonkTradeEvent) -> AnyResult<()> 
         input_token_amount: buy_sol_amount,
         slippage_basis_points: slippage_basis_points,
         recent_blockhash: Some(recent_blockhash),
-        extension_params: Box::new(BonkParams::from_trade(
+        extension_params: DexParamEnum::Bonk(BonkParams::from_trade(
             trade_info.virtual_base,
             trade_info.virtual_quote,
             trade_info.real_base_after,
@@ -174,7 +185,12 @@ async fn bonk_copy_trade_with_grpc(trade_info: BonkTradeEvent) -> AnyResult<()> 
 
     let rpc = client.rpc.clone();
     let payer = client.payer.pubkey();
-    let account = get_associated_token_address(&payer, &mint_pubkey);
+    let account = get_associated_token_address_with_program_id_fast_use_seed(
+        &payer,
+        &mint_pubkey,
+        &trade_info.base_token_program,
+        client.use_seed_optimize,
+    );
     let balance = rpc.get_token_account_balance(&account).await?;
     println!("Balance: {:?}", balance);
     let amount_token = balance.amount.parse::<u64>().unwrap();
@@ -187,7 +203,7 @@ async fn bonk_copy_trade_with_grpc(trade_info: BonkTradeEvent) -> AnyResult<()> 
         input_token_amount: amount_token,
         slippage_basis_points: slippage_basis_points,
         recent_blockhash: Some(recent_blockhash),
-        extension_params: Box::new(BonkParams::from_trade(
+        extension_params: DexParamEnum::Bonk(BonkParams::from_trade(
             trade_info.virtual_base,
             trade_info.virtual_quote,
             trade_info.real_base_after,

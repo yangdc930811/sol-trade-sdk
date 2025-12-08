@@ -87,23 +87,23 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.3.5" }
+sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.3.6" }
 ```
 
 ### Use crates.io
 
 ```toml
 # Add to your Cargo.toml
-sol-trade-sdk = "3.3.5"
+sol-trade-sdk = "3.3.6"
 ```
 
 ## 🛠️ Usage Examples
 
 ### 📋 Example Usage
 
-#### 1. Create SolanaTrade Instance
+#### 1. Create TradingClient Instance
 
-You can refer to [Example: Create SolanaTrade Instance](examples/trading_client/src/main.rs).
+You can refer to [Example: Create TradingClient Instance](examples/trading_client/src/main.rs).
 
 ```rust
 // Wallet
@@ -134,8 +134,8 @@ let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment);
 //         true   // use_seed_optimize: Enable seed optimization globally for all ATA operations (default: true)
 //     );
 
-// Create SolanaTrade client
-let client = SolanaTrade::new(Arc::new(payer), trade_config).await;
+// Create TradingClient
+let client = TradingClient::new(Arc::new(payer), trade_config).await;
 ```
 
 #### 2. Configure Gas Fee Strategy
@@ -154,6 +154,9 @@ gas_fee_strategy.set_global_fee_strategy(150000,150000, 500000,500000, 0.001, 0.
 For detailed information about all trading parameters, see the [Trading Parameters Reference](docs/TRADING_PARAMETERS.md).
 
 ```rust
+// Import DexParamEnum for protocol-specific parameters
+use sol_trade_sdk::trading::core::params::DexParamEnum;
+
 let buy_params = sol_trade_sdk::TradeBuyParams {
   dex_type: DexType::PumpSwap,
   input_token_type: TradeTokenType::WSOL,
@@ -161,14 +164,17 @@ let buy_params = sol_trade_sdk::TradeBuyParams {
   input_token_amount: buy_sol_amount,
   slippage_basis_points: slippage_basis_points,
   recent_blockhash: Some(recent_blockhash),
-  extension_params: Box::new(params.clone()),
+  // Use DexParamEnum for type-safe protocol parameters (zero-overhead abstraction)
+  extension_params: DexParamEnum::PumpSwap(params.clone()),
   address_lookup_table_account: None,
   wait_transaction_confirmed: true,
   create_input_token_ata: true,
   close_input_token_ata: true,
   create_mint_ata: true,
   durable_nonce: None,
-  // Note: seed optimization is now configured globally in TradeConfig
+  fixed_output_token_amount: None,  // Optional: specify exact output amount
+  gas_fee_strategy: gas_fee_strategy.clone(),  // Gas fee strategy configuration
+  simulate: false,  // Set to true for simulation only
 };
 ```
 
@@ -191,7 +197,7 @@ Please ensure that the parameters your trading logic depends on are available in
 
 | Description | Run Command | Source Code |
 |-------------|-------------|-------------|
-| Create and configure SolanaTrade instance | `cargo run --package trading_client` | [examples/trading_client](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/trading_client/src/main.rs) |
+| Create and configure TradingClient instance | `cargo run --package trading_client` | [examples/trading_client](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/trading_client/src/main.rs) |
 | PumpFun token sniping trading | `cargo run --package pumpfun_sniper_trading` | [examples/pumpfun_sniper_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpfun_sniper_trading/src/main.rs) |
 | PumpFun token copy trading | `cargo run --package pumpfun_copy_trading` | [examples/pumpfun_copy_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpfun_copy_trading/src/main.rs) |
 | PumpSwap trading operations | `cargo run --package pumpswap_trading` | [examples/pumpswap_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpswap_trading/src/main.rs) |

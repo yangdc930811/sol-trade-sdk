@@ -20,8 +20,11 @@ pub enum DexParamEnum {
     PumpSwap(PumpSwapParams),
     Bonk(BonkParams),
     RaydiumCpmm(RaydiumCpmmParams),
+    RaydiumClmm(RaydiumClmmParams),
     RaydiumAmmV4(RaydiumAmmV4Params),
     MeteoraDammV2(MeteoraDammV2Params),
+    MeteoraDlmm(MeteoraDlmmParams),
+    Orca(OrcaParams),
 }
 
 impl DexParamEnum {
@@ -35,6 +38,9 @@ impl DexParamEnum {
             DexParamEnum::RaydiumCpmm(p) => p,
             DexParamEnum::RaydiumAmmV4(p) => p,
             DexParamEnum::MeteoraDammV2(p) => p,
+            DexParamEnum::RaydiumClmm(p) => p,
+            DexParamEnum::MeteoraDlmm(p) => p,
+            DexParamEnum::Orca(p) => p,
         }
     }
 }
@@ -661,16 +667,6 @@ impl MeteoraDammV2Params {
     }
 }
 
-impl ProtocolParams for MeteoraDammV2Params {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn ProtocolParams> {
-        Box::new(self.clone())
-    }
-}
-
 #[derive(Clone)]
 pub struct MeteoraDlmmParams {
     pub lb_pair: Pubkey,
@@ -707,16 +703,6 @@ impl MeteoraDlmmParams {
             token_y_program,
             bin_array,
         }
-    }
-}
-
-impl ProtocolParams for MeteoraDlmmParams {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn ProtocolParams> {
-        Box::new(self.clone())
     }
 }
 
@@ -765,16 +751,6 @@ impl OrcaParams {
     }
 }
 
-impl ProtocolParams for OrcaParams {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn ProtocolParams> {
-        Box::new(self.clone())
-    }
-}
-
 #[derive(Clone)]
 pub struct RaydiumClmmParams {
     pub amm_config: Pubkey,
@@ -811,15 +787,5 @@ impl RaydiumClmmParams {
             sqrt_price_limit_x64,
             is_base_input,
         }
-    }
-}
-
-impl ProtocolParams for RaydiumClmmParams {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn ProtocolParams> {
-        Box::new(self.clone())
     }
 }

@@ -3,6 +3,7 @@ use sol_common::common::constants::RAYDIUM_CLMM_PROGRAM_ID;
 use sol_common::protocols::raydium_clmm::states::pool::{PoolState, POOL_TICK_ARRAY_BITMAP_SEED};
 use sol_common::protocols::raydium_clmm::states::tick_array::TICK_ARRAY_SEED;
 use sol_common::protocols::raydium_clmm::states::tickarray_bitmap_extension::TickArrayBitmapExtension;
+use crate::common::AnyResult;
 use crate::common::fast_fn::{get_cached_pda, PdaCacheKey};
 
 pub const SWAP_DISCRIMINATOR: &[u8] = &[43, 4, 237, 11, 26, 201, 30, 98];
@@ -37,18 +38,18 @@ pub fn get_tick_arrays(
     tickarray_bitmap_extension_key: &Pubkey,
     tickarray_bitmap_extension: &TickArrayBitmapExtension,
     zero_for_one: bool,
-) -> Vec<Pubkey> {
+) -> AnyResult<Vec<Pubkey>> {
     let mut tick_array_keys = Vec::new();
 
     // 需要先把tickarray_bitmap_extension_key加入
     tick_array_keys.push(*tickarray_bitmap_extension_key);
 
-    let ex_keys = load_cur_and_next_five_tick_array(pool_key, pool_state, tickarray_bitmap_extension, zero_for_one);
+    let ex_keys = load_cur_and_next_five_tick_array(pool_key, pool_state, tickarray_bitmap_extension, zero_for_one)?;
     if !ex_keys.is_empty() {
         tick_array_keys.extend(ex_keys);
     }
 
-    tick_array_keys
+    Ok(tick_array_keys)
 }
 
 pub fn load_cur_and_next_five_tick_array(
@@ -56,10 +57,9 @@ pub fn load_cur_and_next_five_tick_array(
     pool_state: &PoolState,
     tickarray_bitmap_extension: &TickArrayBitmapExtension,
     zero_for_one: bool,
-) -> Vec<Pubkey> {
+) -> AnyResult<Vec<Pubkey>> {
     let (_, mut current_valid_tick_array_start_index) = pool_state
-        .get_first_initialized_tick_array(&mut Some(*tickarray_bitmap_extension), zero_for_one)
-        .unwrap();
+        .get_first_initialized_tick_array(&mut Some(*tickarray_bitmap_extension), zero_for_one)?;
     let mut tick_array_keys = Vec::new();
     tick_array_keys.push(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
 
@@ -70,8 +70,7 @@ pub fn load_cur_and_next_five_tick_array(
                 &Some(*tickarray_bitmap_extension),
                 current_valid_tick_array_start_index,
                 zero_for_one,
-            )
-            .unwrap();
+            )?;
         if next_tick_array_index.is_none() {
             break;
         }
@@ -79,5 +78,5 @@ pub fn load_cur_and_next_five_tick_array(
         tick_array_keys.push(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
         max_array_size -= 1;
     }
-    tick_array_keys
+    Ok(tick_array_keys)
 }

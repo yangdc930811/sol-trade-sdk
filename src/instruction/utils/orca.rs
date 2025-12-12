@@ -14,7 +14,7 @@ pub mod seeds {
     pub const ORACLE_SEED: &[u8] = b"oracle";
 }
 
-pub async fn fetch_tick_arrays_or_default(
+pub fn fetch_tick_arrays_or_default(
     whirlpool_address: &Pubkey,
     whirlpool: &Whirlpool,
 ) -> AnyResult<Vec<Pubkey>> {

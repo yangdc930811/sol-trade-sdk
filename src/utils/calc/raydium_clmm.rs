@@ -132,6 +132,11 @@ fn swap_compute(
     if amount_specified == 0 {
         return Err(anyhow!("amountSpecified must not be 0"));
     }
+
+    if tick_arrays.is_empty() {
+        return Err(anyhow!("tick_arrays empty"));
+    }
+    
     let sqrt_price_limit_x64 = if sqrt_price_limit_x64 == 0 {
         if zero_for_one {
             tick_math::MIN_SQRT_PRICE_X64 + 1

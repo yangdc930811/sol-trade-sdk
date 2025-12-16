@@ -22,7 +22,7 @@ perf-trace = []  # 性能追踪特性，生产环境应禁用以获得最佳性�
 
 [dependencies]
 sol-common = { path = "../sol-common" }
-solana-streamer = { path = "../solana-streamer" }
+sol-parser-sdk = { path = "../sol-parser-sdk" }
 solana-sdk = "3.0.0"
 solana-client = "3.0.8"
 solana-program = "3.0.0"

@@ -12,6 +12,7 @@ use solana_hash::Hash;
 use solana_sdk::message::AddressLookupTableAccount;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use std::sync::Arc;
+use anyhow::anyhow;
 
 /// DEX 参数枚举 - 零开销抽象替代 Box<dyn ProtocolParams>
 #[derive(Clone)]
@@ -299,9 +300,11 @@ impl PumpSwapParams {
         let coin_creator_vault_ata = crate::instruction::utils::pumpswap::coin_creator_vault_ata(
             creator,
             pool_data.quote_mint,
-        );
+        ).ok_or_else(|| anyhow!("coin_creator_vault_ata empty"))?;
+
         let coin_creator_vault_authority =
-            crate::instruction::utils::pumpswap::coin_creator_vault_authority(creator);
+            crate::instruction::utils::pumpswap::coin_creator_vault_authority(creator)
+                .ok_or_else(|| anyhow!("coin_creator_vault_authority empty"))?;;
 
         let base_token_program_ata = get_associated_token_address_with_program_id(
             &pool_address,

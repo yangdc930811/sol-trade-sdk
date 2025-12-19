@@ -17,6 +17,7 @@ pub mod accounts {
 
     pub const AUTHORITY: Pubkey = pubkey!("HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC");
     pub const METEORA_DAMM_V2: Pubkey = pubkey!("cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG");
+    pub const EVENT_AUTHORITY: Pubkey = pubkey!("3rmHSu74h1ZcmAisVcWerTCiRDQbUrBKmcwptYGjHfet");
 
     // META
 
@@ -30,6 +31,13 @@ pub mod accounts {
     pub const AUTHORITY_META: solana_sdk::instruction::AccountMeta =
         solana_sdk::instruction::AccountMeta {
             pubkey: AUTHORITY,
+            is_signer: false,
+            is_writable: false,
+        };
+
+    pub const EVENT_AUTHORITY_META: solana_sdk::instruction::AccountMeta =
+        solana_sdk::instruction::AccountMeta {
+            pubkey: EVENT_AUTHORITY,
             is_signer: false,
             is_writable: false,
         };

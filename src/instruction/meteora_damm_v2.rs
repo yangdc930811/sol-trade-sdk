@@ -87,7 +87,7 @@ impl InstructionBuilder for MeteoraDammV2InstructionBuilder {
             AccountMeta::new_readonly(protocol_params.token_a_program, false), // Token Program (readonly)
             AccountMeta::new_readonly(protocol_params.token_b_program, false), // Token Program (readonly)
             accounts::METEORA_DAMM_V2_META, // Referral Token Account (readonly)
-            AccountMeta::new_readonly(get_event_authority_pda(), false), // Event Authority (readonly)
+            accounts::EVENT_AUTHORITY_META, // Event Authority (readonly)
             accounts::METEORA_DAMM_V2_META,                              // Program (readonly)
         ];
         // Create instruction data

@@ -2,7 +2,7 @@ use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer, transaction
 use solana_system_interface::instruction::transfer;
 
 use crate::common::{
-    fast_fn::get_associated_token_address_with_program_id_fast, spl_token::close_account,
+    fast_fn::get_associated_token_address_with_program_id_fast, spl_token_sdk::close_account,
     SolanaRpcClient,
 };
 use anyhow::anyhow;

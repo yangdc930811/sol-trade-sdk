@@ -1,6 +1,6 @@
 use crate::common::{
     fast_fn::create_associated_token_account_idempotent_fast,
-    spl_token::close_account,
+    spl_token_sdk::close_account,
     seed::{create_associated_token_account_use_seed, get_associated_token_address_with_program_id_use_seed},
 };
 use smallvec::SmallVec;
@@ -140,7 +140,7 @@ pub fn wrap_wsol_to_sol(
     );
 
     // 4. 添加从用户 WSOL ATA 转账到 seed ATA 的指令
-    let transfer_instruction = crate::common::spl_token::transfer(
+    let transfer_instruction = crate::common::spl_token_sdk::transfer(
         &crate::constants::TOKEN_PROGRAM,
         &user_wsol_ata,
         &seed_ata_address,
@@ -186,7 +186,7 @@ pub fn wrap_wsol_to_sol_without_create(
     );
 
     // 3. 添加从用户 WSOL ATA 转账到 seed ATA 的指令
-    let transfer_instruction = crate::common::spl_token::transfer(
+    let transfer_instruction = crate::common::spl_token_sdk::transfer(
         &crate::constants::TOKEN_PROGRAM,
         &user_wsol_ata,
         &seed_ata_address,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::common::{
     spl_associated_token_account::get_associated_token_address_with_program_id,
-    spl_token::close_account,
+    spl_token_sdk::close_account,
 };
 use crate::perf::compiler_optimization::CompileTimeOptimizedEventProcessor;
 

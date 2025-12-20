@@ -1,5 +1,5 @@
 use crate::{
-    common::spl_token::close_account,
+    common::spl_token_sdk::close_account,
     constants::{trade::trade::DEFAULT_SLIPPAGE, TOKEN_PROGRAM_2022},
     trading::core::{
         params::{PumpFunParams, SwapParams},

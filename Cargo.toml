@@ -18,15 +18,16 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-perf-trace = []  # 性能追踪特性，生产环境应禁用以获得最佳性能
 
 [dependencies]
 sol-common = { path = "../sol-common" }
 solana-streamer = { path = "../solana-streamer" }
-solana-sdk = "3.0.0"
-solana-client = "3.0.8"
-solana-program = "3.0.0"
-solana-rpc-client = "3.0.8"
+
+solana-sdk = {workspace = true}
+solana-program = {workspace = true}
+solana-client = {workspace = true}
+solana-rpc-client = {workspace = true}
+
 solana-rpc-client-api = "3.0.8"
 solana-transaction-status = "3.0.8"
 solana-account-decoder = "3.0.8"
@@ -38,8 +39,11 @@ solana-metrics = "3.0.8"
 solana-nonce = "3.0.0"
 solana-address-lookup-table-interface = "3.0.0"
 solana-compute-budget-interface = "3.0.0"
-solana-commitment-config = { version = "3.0.0", features = ["serde"] }
+solana-commitment-config = { workspace = true }
 solana-transaction-status-client-types = "3.0.0"
+solana-system-interface = { version = "2.0.0", features = ["bincode"] }
+
+spl-token-2022 = {workspace = true}
 
 borsh = { version = "1.5.3", features = ["derive"] }
 isahc = "1.7.2"
@@ -77,7 +81,6 @@ bytemuck = { version = "1.4.0" }
 arrayref = "0.3.6"
 borsh-derive = "1.5.5"
 indicatif = "0.18.0"
-solana-system-interface = { version = "2.0.0", features = ["bincode"] }
 fnv = "1.0.7"
 dashmap = "6.1.0"
 clru = "0.6"
@@ -87,7 +90,6 @@ arc-swap = "1.7"
 sha2 = "0.10"
 tonic-prost = "0.14.2"
 uint = "0.10.0"
-anchor-lang = "0.32.1"
 
 # Performance optimization dependencies
 crossbeam-queue = "0.3"
@@ -97,5 +99,3 @@ num_cpus = "1.16"
 libc = "0.2"
 ruint = "1.17.0"
 num-integer = "0.1.46"
-anchor-spl = "0.32.1"
-spl-token-2022 = "9.0.0"

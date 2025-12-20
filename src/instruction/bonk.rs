@@ -317,7 +317,7 @@ impl InstructionBuilder for BonkInstructionBuilder {
             instructions.extend(crate::trading::common::close_wsol(&params.payer.pubkey()));
         }
         if params.close_input_mint_ata {
-            instructions.push(crate::common::spl_token::close_account(
+            instructions.push(crate::common::spl_token_sdk::close_account(
                 &protocol_params.mint_token_program,
                 &user_base_token_account,
                 &params.payer.pubkey(),

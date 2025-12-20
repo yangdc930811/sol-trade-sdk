@@ -187,7 +187,7 @@ impl InstructionBuilder for MeteoraDammV2InstructionBuilder {
             instructions.extend(crate::trading::common::close_wsol(&params.payer.pubkey()));
         }
         if params.close_input_mint_ata {
-            instructions.push(crate::common::spl_token::close_account(
+            instructions.push(crate::common::spl_token_sdk::close_account(
                 &params.input_token_program,
                 &input_token_account,
                 &params.payer.pubkey(),

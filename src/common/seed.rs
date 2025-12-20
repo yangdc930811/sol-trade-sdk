@@ -84,9 +84,9 @@ pub fn create_associated_token_account_use_seed(
         create_account_with_seed(payer, &ata_like, owner, seed, rent, len, token_program);
 
     let init_acc = if is_2022_token {
-        crate::common::spl_token_2022::initialize_account3(&token_program, &ata_like, mint, owner)?
+        crate::common::spl_token_2022_sdk::initialize_account3(&token_program, &ata_like, mint, owner)?
     } else {
-        crate::common::spl_token::initialize_account3(&token_program, &ata_like, mint, owner)?
+        crate::common::spl_token_sdk::initialize_account3(&token_program, &ata_like, mint, owner)?
     };
 
     Ok(vec![create_acc, init_acc])

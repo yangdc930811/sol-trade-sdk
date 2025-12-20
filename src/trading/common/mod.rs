@@ -3,6 +3,7 @@ pub mod transaction_builder;
 pub mod compute_budget_manager;
 pub mod utils;
 pub mod wsol_manager;
+pub mod arb_transaction_builder;
 
 // Re-export commonly used functions
 pub use nonce_manager::*;

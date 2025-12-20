@@ -6,7 +6,7 @@ pub mod swqos;
 pub mod trading;
 pub mod utils;
 use crate::common::nonce_cache::DurableNonceInfo;
-use crate::common::GasFeeStrategy;
+use crate::common::{AnyResult, GasFeeStrategy};
 use crate::common::TradeConfig;
 use crate::constants::trade::trade::DEFAULT_SLIPPAGE;
 use crate::constants::SOL_TOKEN_ACCOUNT;
@@ -36,6 +36,12 @@ use solana_sdk::message::AddressLookupTableAccount;
 use solana_sdk::signer::Signer;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair, signature::Signature};
 use std::sync::Arc;
+use log::{info, warn};
+use solana_client::rpc_config::{RpcSendTransactionConfig, RpcSimulateTransactionConfig};
+use solana_client::rpc_response::transaction::Instruction;
+use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
+use solana_transaction_status_client_types::{UiTransactionEncoding, UiTransactionError};
+use crate::trading::common::arb_transaction_builder::build_transaction;
 
 /// Type of the token to buy
 #[derive(Clone, PartialEq)]
@@ -576,6 +582,83 @@ impl TradingClient {
         let result =
             swap_result.map(|(success, sigs, err)| (success, sigs, err.map(TradeError::from)));
         return result;
+    }
+
+    #[inline]
+    pub async fn send_to_smart_contract(
+        &self,
+        unit_limit: u32,
+        unit_price: u64,
+        business_instructions: Vec<Instruction>,
+        address_lookup_table_account: Option<AddressLookupTableAccount>,
+        recent_blockhash: Option<Hash>,
+        data_size_limit: u32,
+        is_simulate: bool,
+    ) -> AnyResult<()> {
+        let transaction = build_transaction(
+            self.payer.clone(),
+            unit_limit,
+            unit_price,
+            business_instructions,
+            address_lookup_table_account,
+            recent_blockhash,
+            data_size_limit,
+        )?;
+
+        // 发送
+        if is_simulate {
+            // 打印原始交易数据
+            let bytes = transaction.message.serialize();
+            println!("[Raw Transaction] {}", base64::encode(&bytes));
+
+            // Simulate the transaction
+            use solana_commitment_config::CommitmentConfig;
+            let simulate_result = self.rpc
+                .simulate_transaction_with_config(
+                    &transaction,
+                    RpcSimulateTransactionConfig {
+                        sig_verify: false,               // Don't verify signature during simulation for speed
+                        replace_recent_blockhash: false, // Use actual blockhash from transaction
+                        commitment: Some(CommitmentConfig {
+                            commitment: CommitmentLevel::Processed, // Use Processed level to get latest state
+                        }),
+                        encoding: Some(UiTransactionEncoding::Base64), // Base64 encoding
+                        accounts: None,           // Don't return specific account states (can be specified if needed)
+                        min_context_slot: None,   // Don't specify minimum context slot
+                        inner_instructions: true, // Enable inner instructions for debugging and detailed execution flow
+                    },
+                )
+                .await?;
+
+            let signature = transaction
+                .signatures
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Transaction has no signatures"))?
+                .clone();
+
+            // 检查模拟结果
+            match simulate_result.value.err {
+                None => {
+                    println!("[Simulation Success] {}", signature);
+                }
+                Some(err) => {
+                    println!("[Simulation Failed] error={:?} signature={:?}", err, signature);
+                }
+            }
+
+            return Ok(());
+        }
+
+        let send_config = RpcSendTransactionConfig {
+            skip_preflight: true,
+            encoding: Some(UiTransactionEncoding::Base64), // Base64 encoding
+            min_context_slot: None,   // Don't specify minimum context slot
+            preflight_commitment: None,
+            max_retries: None,
+        };
+        let send_result = self.rpc.send_transaction_with_config(&transaction, send_config).await?;
+        println!("[Transaction Signature] {}", send_result);
+        Ok(())
     }
 
     /// Execute a sell order for a percentage of the specified token amount

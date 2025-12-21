@@ -179,6 +179,7 @@ pub fn sell_base_input_internal(
         return Err("Invalid input: 'baseReserve' or 'quoteReserve' cannot be zero.".to_string());
     }
 
+    // todo 费率计算是否正确？
     // Calculate quote amount out using constant product formula
     let quote_amount_out = ((quote_reserve as u128) * (base as u128)
         / ((base_reserve as u128) + (base as u128))) as u64;

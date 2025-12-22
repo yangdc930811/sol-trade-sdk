@@ -123,6 +123,13 @@ pub const LIGHTSPEED_TIP_ACCOUNTS: &[Pubkey] = &[
     pubkey!("9tYF5yPDC1NP8s6diiB3kAX6ZZnva9DM3iDwJkBRarBB"),
 ];
 
+pub const SOYAS_TIP_ACCOUNTS: &[Pubkey] = &[
+    pubkey!("soyas4s6L8KWZ8rsSk1mF3d1mQScoTGGAgjk98bF8nP"),
+    pubkey!("soyascXFW5wEEYiwfEmHy2pNwomqzvggJosGVD6TJdY"),
+    pubkey!("soyasDBdKjADwPz3xk82U3TNPRDKEWJj7wWLajNHZ1L"),
+    pubkey!("soyasE2abjBAynmHbGWgEwk4ctBy7JMTUCNrMbjcnyH"),
+];
+
 // NewYork,
 // Frankfurt,
 // Amsterdam,
@@ -184,7 +191,7 @@ pub const SWQOS_ENDPOINTS_BLOX: [&str; 8] = [
     "https://tokyo.solana.dex.blxrbdn.com",
     "https://uk.solana.dex.blxrbdn.com",
     "https://la.solana.dex.blxrbdn.com",
-    "https://germany.solana.dex.blxrbdn.com",
+    "https://global.solana.dex.blxrbdn.com",
 ];
 
 pub const SWQOS_ENDPOINTS_NODE1: [&str; 8] = [
@@ -242,15 +249,27 @@ pub const SWQOS_ENDPOINTS_STELLIUM: [&str; 8] = [
     "http://fra1.flashrpc.com",
 ];
 
+pub const SWQOS_ENDPOINTS_SOYAS: [&str; 8] = [
+    "nyc.landing.soyas.xyz:9000",
+    "fra.landing.soyas.xyz:9000",
+    "ams.landing.soyas.xyz:9000",
+    "nyc.landing.soyas.xyz:9000",
+    "nyc.landing.soyas.xyz:9000",
+    "ams.landing.soyas.xyz:9000",
+    "nyc.landing.soyas.xyz:9000",
+    "fra.landing.soyas.xyz:9000",
+];
+
 pub const SWQOS_MIN_TIP_DEFAULT: f64 = 0.00001; // 其它SWQOS默认最低小费
-pub const SWQOS_MIN_TIP_JITO: f64 = SWQOS_MIN_TIP_DEFAULT;
+pub const SWQOS_MIN_TIP_JITO: f64 = 0.00001;
 pub const SWQOS_MIN_TIP_NEXTBLOCK: f64 = 0.001;
-pub const SWQOS_MIN_TIP_ZERO_SLOT: f64 = 0.001;
-pub const SWQOS_MIN_TIP_TEMPORAL: f64 = 0.001;
-pub const SWQOS_MIN_TIP_BLOXROUTE: f64 = 0.001;
-pub const SWQOS_MIN_TIP_NODE1: f64 = 0.002; // 如需更高阈值可调整
-pub const SWQOS_MIN_TIP_FLASHBLOCK: f64 = 0.001;
-pub const SWQOS_MIN_TIP_BLOCKRAZOR: f64 = 0.001;
-pub const SWQOS_MIN_TIP_ASTRALANE: f64 = SWQOS_MIN_TIP_DEFAULT;
-pub const SWQOS_MIN_TIP_STELLIUM: f64 = 0.001; // Stellium requires minimum 0.001 SOL tip
-pub const SWQOS_MIN_TIP_LIGHTSPEED: f64 = 0.001; // Lightspeed requires minimum 0.001 SOL tip
+pub const SWQOS_MIN_TIP_ZERO_SLOT: f64 = 0.0001;
+pub const SWQOS_MIN_TIP_TEMPORAL: f64 = 0.0001;
+pub const SWQOS_MIN_TIP_BLOXROUTE: f64 = 0.0001;
+pub const SWQOS_MIN_TIP_NODE1: f64 = 0.0001; // 如需更高阈值可调整
+pub const SWQOS_MIN_TIP_FLASHBLOCK: f64 = 0.0001;
+pub const SWQOS_MIN_TIP_BLOCKRAZOR: f64 = 0.0001;
+pub const SWQOS_MIN_TIP_ASTRALANE: f64 = 0.00001;
+pub const SWQOS_MIN_TIP_STELLIUM: f64 = 0.0001; // Stellium requires minimum 0.001 SOL tip
+pub const SWQOS_MIN_TIP_LIGHTSPEED: f64 = 0.0001; // Lightspeed requires minimum 0.001 SOL tip
+pub const SWQOS_MIN_TIP_SOYAS: f64 = 0.001; // Soyas requires minimum 0.001 SOL tip

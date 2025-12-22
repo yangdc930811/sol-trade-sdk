@@ -42,6 +42,7 @@ solana-compute-budget-interface = "3.0.0"
 solana-commitment-config = { workspace = true }
 solana-transaction-status-client-types = "3.0.0"
 solana-system-interface = { version = "2.0.0", features = ["bincode"] }
+solana-tls-utils = "3.0.8"
 
 spl-token-2022 = {workspace = true}
 
@@ -90,6 +91,7 @@ arc-swap = "1.7"
 sha2 = "0.10"
 tonic-prost = "0.14.2"
 uint = "0.10.0"
+quinn = {version = "0.11", default-features = false, features = ["rustls"]}
 
 # Performance optimization dependencies
 crossbeam-queue = "0.3"

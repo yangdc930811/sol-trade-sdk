@@ -160,7 +160,7 @@ pub fn coin_creator_vault_authority(coin_creator: Pubkey) -> Option<Pubkey> {
 
 pub fn coin_creator_vault_ata(coin_creator: Pubkey, quote_mint: Pubkey) -> Option<Pubkey> {
     get_cached_pda(
-        PdaCacheKey::PumpSwapVaultAta(coin_creator), || {
+        PdaCacheKey::PumpSwapVaultAta(coin_creator, quote_mint), || {
             if let Some(creator_vault_authority) = coin_creator_vault_authority(coin_creator) {
                 let coin_creator_vault_ata = get_associated_token_address_with_program_id_fast(
                     &creator_vault_authority,

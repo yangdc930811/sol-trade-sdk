@@ -158,7 +158,7 @@ pub enum PdaCacheKey {
     BonkVault(Pubkey, Pubkey),
     PumpSwapUserVolume(Pubkey),
     PumpSwapVaultAuthority(Pubkey),
-    PumpSwapVaultAta(Pubkey),
+    PumpSwapVaultAta(Pubkey, Pubkey),
     MeteoraDlmmBinArrayBitmapExtension(Pubkey),
     OrcaOracle(Pubkey),
     OrcaTickArrayAddress(Pubkey, i32),

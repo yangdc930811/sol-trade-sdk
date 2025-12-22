@@ -585,7 +585,7 @@ impl TradingClient {
     }
 
     #[inline]
-    pub async fn send_to_smart_contract(
+    pub async fn send_to_grpc(
         &self,
         unit_limit: u32,
         unit_price: u64,

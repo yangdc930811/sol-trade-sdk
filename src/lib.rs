@@ -605,7 +605,7 @@ impl TradingClient {
         recent_blockhash: Option<Hash>,
         data_size_limit: u32,
         is_simulate: bool,
-    ) -> AnyResult<()> {
+    ) -> AnyResult<Signature> {
         let transaction = build_transaction(
             self.payer.clone(),
             unit_limit,
@@ -615,6 +615,12 @@ impl TradingClient {
             recent_blockhash,
             data_size_limit,
         )?;
+
+        let signature = transaction
+            .signatures
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Transaction has no signatures"))?
+            .clone();
 
         // 发送
         if is_simulate {
@@ -641,12 +647,6 @@ impl TradingClient {
                 )
                 .await?;
 
-            let signature = transaction
-                .signatures
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("Transaction has no signatures"))?
-                .clone();
-
             // 检查模拟结果
             match simulate_result.value.err {
                 None => {
@@ -657,7 +657,7 @@ impl TradingClient {
                 }
             }
 
-            return Ok(());
+            return Ok(signature);
         }
 
         let send_config = RpcSendTransactionConfig {
@@ -669,7 +669,7 @@ impl TradingClient {
         };
         let send_result = self.rpc.send_transaction_with_config(&transaction, send_config).await?;
         println!("[Transaction Signature] {}", send_result);
-        Ok(())
+        Ok(signature)
     }
 
     /// Execute a sell order for a percentage of the specified token amount

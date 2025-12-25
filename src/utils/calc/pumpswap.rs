@@ -5,6 +5,7 @@ use crate::instruction::utils::pumpswap::accounts::{
     COIN_CREATOR_FEE_BASIS_POINTS, LP_FEE_BASIS_POINTS, PROTOCOL_FEE_BASIS_POINTS,
 };
 use solana_sdk::pubkey::Pubkey;
+use sol_common::common::tier::PumpFee;
 
 /// Result for buying base tokens with base amount input
 #[derive(Clone, Debug)]
@@ -122,17 +123,14 @@ pub fn buy_quote_input_internal(
     slippage_basis_points: u64,
     base_reserve: u64,
     quote_reserve: u64,
-    coin_creator: &Pubkey,
+    fee: &PumpFee,
 ) -> Result<BuyQuoteInputResult, String> {
     if base_reserve == 0 || quote_reserve == 0 {
         return Err("Invalid input: 'baseReserve' or 'quoteReserve' cannot be zero.".to_string());
     }
 
     // Calculate total fee basis points
-    let total_fee_bps = LP_FEE_BASIS_POINTS
-        + PROTOCOL_FEE_BASIS_POINTS
-        + if *coin_creator == Pubkey::default() { 0 } else { COIN_CREATOR_FEE_BASIS_POINTS };
-    let total_fee_bps = 125;
+    let total_fee_bps = fee.lp_fee + fee.protocol_fee + fee.creator_fee;
     let denominator = 10_000 + total_fee_bps;
 
     // Calculate effective quote amount after fees
@@ -174,25 +172,24 @@ pub fn sell_base_input_internal(
     slippage_basis_points: u64,
     base_reserve: u64,
     quote_reserve: u64,
-    coin_creator: &Pubkey,
+    fee: &PumpFee,
 ) -> Result<SellBaseInputResult, String> {
     if base_reserve == 0 || quote_reserve == 0 {
         return Err("Invalid input: 'baseReserve' or 'quoteReserve' cannot be zero.".to_string());
     }
 
-    // todo 费率计算是否正确？
     // Calculate quote amount out using constant product formula
     let quote_amount_out = ((quote_reserve as u128) * (base as u128)
         / ((base_reserve as u128) + (base as u128))) as u64;
 
     // Calculate fees
-    let lp_fee = compute_fee(quote_amount_out as u128, LP_FEE_BASIS_POINTS as u128) as u64;
+    let lp_fee = compute_fee(quote_amount_out as u128, fee.lp_fee as u128) as u64;
     let protocol_fee =
-        compute_fee(quote_amount_out as u128, PROTOCOL_FEE_BASIS_POINTS as u128) as u64;
-    let coin_creator_fee = if *coin_creator == Pubkey::default() {
+        compute_fee(quote_amount_out as u128, fee.protocol_fee as u128) as u64;
+    let coin_creator_fee = if fee.creator_fee == 0 {
         0
     } else {
-        compute_fee(quote_amount_out as u128, COIN_CREATOR_FEE_BASIS_POINTS as u128) as u64
+        compute_fee(quote_amount_out as u128, fee.creator_fee as u128) as u64
     };
 
     // Calculate final quote after fees

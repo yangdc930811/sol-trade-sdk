@@ -85,7 +85,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         };
         let fee_recipient_ata = fee_recipient_ata(fee_recipient, quote_mint);
 
-        let output_amount = params.fixed_output_amount.unwrap_or(0);
+        let output_amount = params.fixed_output_amount.unwrap_or(1);
 
         // ========================================
         // Build instructions

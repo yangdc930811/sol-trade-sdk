@@ -132,6 +132,7 @@ pub fn buy_quote_input_internal(
     let total_fee_bps = LP_FEE_BASIS_POINTS
         + PROTOCOL_FEE_BASIS_POINTS
         + if *coin_creator == Pubkey::default() { 0 } else { COIN_CREATOR_FEE_BASIS_POINTS };
+    let total_fee_bps = 125;
     let denominator = 10_000 + total_fee_bps;
 
     // Calculate effective quote amount after fees

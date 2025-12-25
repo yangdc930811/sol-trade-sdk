@@ -59,8 +59,6 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             creator = params_coin_creator_vault_authority;
         }
 
-        let output_amount = params.fixed_output_amount.unwrap_or(0);
-
         let user_base_token_account =
             crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
                 &params.payer.pubkey(),
@@ -86,6 +84,8 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             accounts::FEE_RECIPIENT_META
         };
         let fee_recipient_ata = fee_recipient_ata(fee_recipient, quote_mint);
+
+        let output_amount = params.fixed_output_amount.unwrap_or(0);
 
         // ========================================
         // Build instructions
@@ -143,10 +143,10 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         // Create instruction data
         let mut data = [0u8; 24];
         data[..8].copy_from_slice(&BUY_DISCRIMINATOR);
-        // base_amount_out
-        data[8..16].copy_from_slice(&output_amount.to_le_bytes());
-        // max_quote_amount_in
-        data[16..24].copy_from_slice(&params.input_amount.unwrap().to_le_bytes());
+        // amount_in
+        data[8..16].copy_from_slice(&params.input_amount.unwrap().to_le_bytes());
+        // amount_output
+        data[16..24].copy_from_slice(&output_amount.to_le_bytes());
 
         let buy_instruction = Instruction {
             program_id: accounts::AMM_PROGRAM,

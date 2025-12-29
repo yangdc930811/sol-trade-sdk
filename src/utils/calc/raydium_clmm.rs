@@ -136,7 +136,7 @@ fn swap_compute(
     if tick_arrays.is_empty() {
         return Err(anyhow!("tick_arrays empty"));
     }
-    
+
     let sqrt_price_limit_x64 = if sqrt_price_limit_x64 == 0 {
         if zero_for_one {
             tick_math::MIN_SQRT_PRICE_X64 + 1
@@ -171,7 +171,12 @@ fn swap_compute(
         liquidity: pool_state.liquidity,
     };
 
-    let mut tick_array_current = tick_arrays.pop_front().unwrap();
+    let tick_array_current = tick_arrays.pop_front();
+    if tick_array_current.is_none() {
+        return Result::Err(anyhow!("tick_array_current empty"));
+    }
+
+    let mut tick_array_current = tick_array_current.unwrap();
     if tick_array_current.start_tick_index != current_valid_tick_array_start_index {
         return Result::Err(anyhow!("tick array start tick index does not match"));
     }
@@ -211,22 +216,22 @@ fn swap_compute(
                     &Some(*tickarray_bitmap_extension),
                     current_valid_tick_array_start_index,
                     zero_for_one,
-                )
-                .unwrap();
-            tick_array_current = tick_arrays.pop_front().unwrap();
-            if current_valid_tick_array_start_index.is_none() {
-                return Result::Err(anyhow!("tick array start tick index out of range limit"));
-            }
-            if tick_array_current.start_tick_index != current_valid_tick_array_start_index.unwrap()
-            {
-                return Result::Err(anyhow!("tick array start tick index does not match"));
-            }
-            tick_array_start_index_vec.push_back(tick_array_current.start_tick_index);
-            let mut first_initialized_tick = tick_array_current
-                .first_initialized_tick(zero_for_one)
-                .unwrap();
+                )?;
+            if let Some(mut tick_array_current) = tick_arrays.pop_front() {
+                if current_valid_tick_array_start_index.is_none() {
+                    return Result::Err(anyhow!("tick array start tick index out of range limit"));
+                }
 
-            next_initialized_tick = Box::new(*first_initialized_tick.deref_mut());
+                if tick_array_current.start_tick_index != current_valid_tick_array_start_index.unwrap()
+                {
+                    return Result::Err(anyhow!("tick array start tick index does not match"));
+                }
+                tick_array_start_index_vec.push_back(tick_array_current.start_tick_index);
+                let mut first_initialized_tick = tick_array_current
+                    .first_initialized_tick(zero_for_one)?;
+
+                next_initialized_tick = Box::new(*first_initialized_tick.deref_mut());
+            }
         }
         step.tick_next = next_initialized_tick.tick;
         step.initialized = next_initialized_tick.is_initialized();

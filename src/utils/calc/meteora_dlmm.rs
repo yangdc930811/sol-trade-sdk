@@ -220,6 +220,8 @@ pub fn quote_exact_in(
             .cloned()
             .context("Active bin array not found")?;
 
+        shift_active_bin_if_empty_gap(&mut lb_pair, &active_bin_array, swap_for_y)?;
+
         loop {
             if !active_bin_array.is_bin_id_within_range(lb_pair.active_id)? || amount_left == 0 {
                 break;
@@ -261,6 +263,28 @@ pub fn quote_exact_in(
         amount_out: transfer_fee_excluded_amount_out,
         fee: total_fee,
     })
+}
+
+fn shift_active_bin_if_empty_gap(
+    lb_pair: &mut LbPair,
+    active_bin_array: &BinArray,
+    swap_for_y: bool,
+) -> Result<()> {
+    let lb_pair_bin_array_index = BinArray::bin_id_to_bin_array_index(lb_pair.active_id)?;
+
+    if i64::from(lb_pair_bin_array_index) != active_bin_array.index {
+        if swap_for_y {
+            let (_, upper_bin_id) =
+                BinArray::get_bin_array_lower_upper_bin_id(active_bin_array.index as i32)?;
+            lb_pair.active_id = upper_bin_id;
+        } else {
+            let (lower_bin_id, _) =
+                BinArray::get_bin_array_lower_upper_bin_id(active_bin_array.index as i32)?;
+            lb_pair.active_id = lower_bin_id;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn get_bin_array_pubkeys_for_swap(

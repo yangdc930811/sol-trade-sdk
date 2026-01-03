@@ -672,6 +672,92 @@ impl TradingClient {
         Ok(signature)
     }
 
+    #[inline]
+    pub async fn send(
+        &self,
+        params: TradeBuyParams,
+    ) -> Result<(bool, Vec<Signature>, Option<TradeError>), anyhow::Error> {
+        #[cfg(feature = "perf-trace")]
+        if params.slippage_basis_points.is_none() {
+            log::debug!(
+                "slippage_basis_points is none, use default slippage basis points: {}",
+                DEFAULT_SLIPPAGE
+            );
+        }
+
+        let executor = TradeFactory::create_executor(params.dex_type.clone());
+        let protocol_params = params.extension_params;
+        let buy_params = SwapParams {
+            rpc: Some(self.rpc.clone()),
+            payer: self.payer.clone(),
+            trade_type: TradeType::Buy,
+            input_mint: params.input_mint,
+            output_mint: params.output_mint,
+            input_token_program: params.input_token_program,
+            output_token_program: params.output_token_program,
+            input_amount: Some(params.input_token_amount),
+            slippage_basis_points: params.slippage_basis_points,
+            address_lookup_table_account: params.address_lookup_table_account,
+            recent_blockhash: params.recent_blockhash,
+            data_size_limit: params
+                .gas_fee_strategy
+                .get_strategies(TradeType::Buy)
+                .get(0)
+                .map(|(_, _, v)| v.data_size_limit)
+                .unwrap_or(256 * 1024),
+            wait_transaction_confirmed: params.wait_transaction_confirmed,
+            protocol_params: protocol_params.clone(),
+            open_seed_optimize: self.use_seed_optimize, // 使用全局seed优化配置
+            swqos_clients: self.swqos_clients.clone(),
+            middleware_manager: self.middleware_manager.clone(),
+            durable_nonce: params.durable_nonce,
+            with_tip: true,
+            create_input_mint_ata: params.create_input_mint_ata,
+            close_input_mint_ata: params.close_input_mint_ata,
+            create_output_mint_ata: params.create_output_mint_ata,
+            close_output_mint_ata: false,
+            fixed_output_amount: params.fixed_output_token_amount,
+            gas_fee_strategy: params.gas_fee_strategy,
+            simulate: params.simulate,
+        };
+
+        // Validate protocol params
+        let is_valid_params = match params.dex_type {
+            DexType::PumpFun => protocol_params.as_any().downcast_ref::<PumpFunParams>().is_some(),
+            DexType::PumpSwap => {
+                protocol_params.as_any().downcast_ref::<PumpSwapParams>().is_some()
+            }
+            DexType::Bonk => protocol_params.as_any().downcast_ref::<BonkParams>().is_some(),
+            DexType::RaydiumCpmm => {
+                protocol_params.as_any().downcast_ref::<RaydiumCpmmParams>().is_some()
+            }
+            DexType::RaydiumAmmV4 => {
+                protocol_params.as_any().downcast_ref::<RaydiumAmmV4Params>().is_some()
+            }
+            DexType::MeteoraDammV2 => {
+                protocol_params.as_any().downcast_ref::<MeteoraDammV2Params>().is_some()
+            }
+            DexType::MeteoraDlmm => {
+                protocol_params.as_any().downcast_ref::<MeteoraDlmmParams>().is_some()
+            }
+            DexType::Orca => {
+                protocol_params.as_any().downcast_ref::<OrcaParams>().is_some()
+            }
+            DexType::RaydiumClmm => {
+                protocol_params.as_any().downcast_ref::<RaydiumClmmParams>().is_some()
+            }
+        };
+
+        if !is_valid_params {
+            return Err(anyhow::anyhow!("Invalid protocol params for Trade"));
+        }
+
+        let swap_result = executor.swap(buy_params).await;
+        let result =
+            swap_result.map(|(success, sigs, err)| (success, sigs, err.map(TradeError::from)));
+        return result;
+    }
+
     /// Execute a sell order for a percentage of the specified token amount
     ///
     /// This is a convenience function that calculates the exact amount to sell based on

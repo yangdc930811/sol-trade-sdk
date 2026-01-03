@@ -28,7 +28,7 @@ use crate::{
         SWQOS_MIN_TIP_ASTRALANE,
         SWQOS_MIN_TIP_STELLIUM,
         SWQOS_MIN_TIP_LIGHTSPEED,
-        SWQOS_MIN_TIP_SOYAS
+        SWQOS_MIN_TIP_SOYAS,
     },
 };
 
@@ -71,6 +71,7 @@ struct ResultCollector {
     landed_failed_flag: Arc<AtomicBool>,  // 🔧 Tx landed on-chain but failed (nonce consumed)
     completed_count: Arc<AtomicUsize>,
     total_tasks: usize,
+    signatures: Arc<ArrayQueue<Signature>>,
 }
 
 impl ResultCollector {
@@ -81,7 +82,12 @@ impl ResultCollector {
             landed_failed_flag: Arc::new(AtomicBool::new(false)),
             completed_count: Arc::new(AtomicUsize::new(0)),
             total_tasks: capacity,
+            signatures: Arc::new(ArrayQueue::new(capacity)),
         }
+    }
+
+    fn record_signature(&self, signature: Signature) {
+        let _ = self.signatures.push(signature);
     }
 
     fn submit(&self, result: TaskResult) {
@@ -172,7 +178,7 @@ impl ResultCollector {
         let mut signatures = Vec::new();
         let mut has_success = false;
         let mut last_error = None;
-        
+
         while let Some(result) = self.results.pop() {
             signatures.push(result.signature);
             if result.success {
@@ -182,7 +188,11 @@ impl ResultCollector {
                 last_error = result.error;
             }
         }
-        
+
+        while let Some(result) = self.signatures.pop() {
+            signatures.push(result);
+        }
+
         if !signatures.is_empty() {
             Some((has_success, signatures, last_error))
         } else {
@@ -215,9 +225,9 @@ pub async fn execute_parallel(
 
     if !with_tip
         && swqos_clients
-            .iter()
-            .find(|swqos| matches!(swqos.get_swqos_type(), SwqosType::Default))
-            .is_none()
+        .iter()
+        .find(|swqos| matches!(swqos.get_swqos_type(), SwqosType::Default))
+        .is_none()
     {
         return Err(anyhow!("No Rpc Default Swqos configured."));
     }
@@ -311,7 +321,7 @@ pub async fn execute_parallel(
             let tip_amount = if with_tip { tip } else { 0.0 };
 
             let _build_start = Instant::now();
-            let transaction = match build_transaction(
+            match build_transaction(
                 payer,
                 rpc,
                 unit_limit,
@@ -327,9 +337,51 @@ pub async fn execute_parallel(
                 tip_amount,
                 durable_nonce,
             )
-            .await
+                .await
             {
-                Ok(tx) => tx,
+                Ok(transaction) => {
+                    if let Some(signature) = transaction.signatures.first() {
+                        // 缓存signature
+                        collector.record_signature(signature.clone());
+                    }
+
+                    // Transaction built
+                    let _send_start = Instant::now();
+                    let mut err: Option<anyhow::Error> = None;
+                    let mut landed_on_chain = false;
+                    let success = match swqos_client
+                        .send_transaction(
+                            if is_buy { TradeType::Buy } else { TradeType::Sell },
+                            &transaction,
+                            wait_transaction_confirmed,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            landed_on_chain = true;  // Success means tx confirmed on-chain
+                            true
+                        }
+                        Err(e) => {
+                            // Check if this error indicates the tx landed but failed (e.g., ExceededSlippage)
+                            landed_on_chain = is_landed_error(&e);
+                            err = Some(e);
+                            // Send transaction failed
+                            false
+                        }
+                    };
+
+                    // Transaction sent
+
+                    if let Some(signature) = transaction.signatures.first() {
+                        collector.submit(TaskResult {
+                            success,
+                            signature: *signature,
+                            error: err,
+                            swqos_type,  // 🔧 记录SWQOS类型
+                            landed_on_chain,  // 🔧 Whether tx landed (even if it failed)
+                        });
+                    }
+                }
                 Err(e) => {
                     // Build transaction failed
                     collector.submit(TaskResult {
@@ -342,44 +394,6 @@ pub async fn execute_parallel(
                     return;
                 }
             };
-
-            // Transaction built
-
-            let _send_start = Instant::now();
-            let mut err: Option<anyhow::Error> = None;
-            let mut landed_on_chain = false;
-            let success = match swqos_client
-                .send_transaction(
-                    if is_buy { TradeType::Buy } else { TradeType::Sell },
-                    &transaction,
-                    wait_transaction_confirmed,
-                )
-                .await
-            {
-                Ok(()) => {
-                    landed_on_chain = true;  // Success means tx confirmed on-chain
-                    true
-                }
-                Err(e) => {
-                    // Check if this error indicates the tx landed but failed (e.g., ExceededSlippage)
-                    landed_on_chain = is_landed_error(&e);
-                    err = Some(e);
-                    // Send transaction failed
-                    false
-                }
-            };
-
-            // Transaction sent
-
-            if let Some(signature) = transaction.signatures.first() {
-                collector.submit(TaskResult {
-                    success,
-                    signature: *signature,
-                    error: err,
-                    swqos_type,  // 🔧 记录SWQOS类型
-                    landed_on_chain,  // 🔧 Whether tx landed (even if it failed)
-                });
-            }
         });
     }
 

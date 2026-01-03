@@ -43,15 +43,6 @@ pub async fn build_transaction(
         return Err(e);
     }
 
-    // Add tip transfer instruction
-    if with_tip && tip_amount > 0.0 {
-        instructions.push(transfer(
-            &payer.pubkey(),
-            tip_account,
-            sol_str_to_lamports(tip_amount.to_string().as_str()).unwrap_or(0),
-        ));
-    }
-
     // Add compute budget instructions
     instructions.extend(compute_budget_instructions(
         unit_price,
@@ -60,6 +51,15 @@ pub async fn build_transaction(
 
     // Add business instructions
     instructions.extend(business_instructions);
+
+    // Add tip transfer instruction
+    if with_tip && tip_amount > 0.0 {
+        instructions.push(transfer(
+            &payer.pubkey(),
+            tip_account,
+            sol_str_to_lamports(tip_amount.to_string().as_str()).unwrap_or(0),
+        ));
+    }
 
     // Get blockhash for transaction
     let blockhash = get_transaction_blockhash(recent_blockhash, durable_nonce.clone());

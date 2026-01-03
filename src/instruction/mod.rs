@@ -8,3 +8,4 @@ pub mod utils;
 pub mod orca;
 pub mod raydium_clmm;
 pub mod meteora_dlmm;
+pub mod arb;

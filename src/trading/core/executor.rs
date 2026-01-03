@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 use solana_hash::Hash;
 use solana_sdk::{
     instruction::Instruction, message::AddressLookupTableAccount, pubkey::Pubkey,
@@ -18,6 +18,7 @@ use crate::{
 };
 use once_cell::sync::Lazy;
 use crate::swqos::TradeType;
+use crate::trading::core::params::ArbSwapParams;
 use super::{params::SwapParams, traits::InstructionBuilder};
 
 /// 🚀 全局系统调用绕过管理器
@@ -163,6 +164,115 @@ impl TradeExecutor for GenericTradeExecutor {
             );
         }
         
+        #[cfg(not(feature = "perf-trace"))]
+        let _ = (build_elapsed, before_submit_elapsed, send_elapsed, total_elapsed);
+
+        result
+    }
+
+    async fn swap_arb(&self, params: ArbSwapParams) -> Result<(bool, Vec<Signature>, Option<Error>)> {
+        let total_start = Instant::now();
+
+        // CPU 预取
+        Prefetch::keypair(&params.payer);
+
+        // 构建指令
+        let build_start = Instant::now();
+        let instructions = params.instructions;
+        let build_elapsed = build_start.elapsed();
+
+        // 指令预处理
+        InstructionProcessor::preprocess(&instructions)?;
+
+        // 提交前耗时
+        let before_submit_elapsed = total_start.elapsed();
+
+        let is_buy = true;
+
+        // 如果是模拟模式，直接通过 RPC 模拟交易
+        if params.simulate {
+            let send_start = Instant::now();
+            let result = simulate_transaction(
+                params.rpc,
+                params.payer,
+                instructions,
+                params.address_lookup_table_account,
+                params.recent_blockhash,
+                params.durable_nonce,
+                params.middleware_manager,
+                self.protocol_name,
+                is_buy,
+                params.with_tip,
+                params.gas_fee_strategy,
+            )
+                .await;
+            let send_elapsed = send_start.elapsed();
+            let total_elapsed = total_start.elapsed();
+
+            // Get performance metrics using fast timestamp
+            let timestamp_ns = SYSCALL_BYPASS.fast_timestamp_nanos();
+
+            // Print all timing metrics at once to avoid blocking critical path
+            println!("[Timestamp] {}ns", timestamp_ns);
+            println!(
+                "[Build Instructions] Time: {:.3}ms ({:.0}μs)",
+                build_elapsed.as_micros() as f64 / 1000.0,
+                build_elapsed.as_micros()
+            );
+            println!(
+                "[Before Submit] {:.3}ms ({:.0}μs)",
+                before_submit_elapsed.as_micros() as f64 / 1000.0,
+                before_submit_elapsed.as_micros()
+            );
+            println!(
+                "[Simulate Transaction] Time: {:.3}ms ({:.0}μs)",
+                send_elapsed.as_micros() as f64 / 1000.0,
+                send_elapsed.as_micros()
+            );
+            println!(
+                "[Total Time] {:.3}ms ({:.0}μs)",
+                total_elapsed.as_micros() as f64 / 1000.0,
+                total_elapsed.as_micros()
+            );
+
+            return result;
+        }
+
+        // 并行发送交易
+        let send_start = Instant::now();
+        let result = execute_parallel(
+            params.swqos_clients.clone(),
+            params.payer,
+            params.rpc,
+            instructions,
+            params.address_lookup_table_account,
+            params.recent_blockhash,
+            params.durable_nonce,
+            params.middleware_manager,
+            self.protocol_name,
+            is_buy,
+            false,
+            params.with_tip,
+            params.gas_fee_strategy,
+        )
+            .await;
+        let send_elapsed = send_start.elapsed();
+        let total_elapsed = total_start.elapsed();
+
+        // Get performance metrics using fast timestamp
+        #[cfg(feature = "perf-trace")]
+        {
+            let timestamp_ns = SYSCALL_BYPASS.fast_timestamp_nanos();
+            log::trace!(
+                "[Execute] timestamp_ns={} build_us={} before_submit_us={} send_us={} total_us={}",
+                timestamp_ns,
+                build_elapsed.as_micros(),
+                before_submit_elapsed.as_micros(),
+                send_elapsed.as_micros(),
+                total_elapsed.as_micros()
+            );
+        }
+
         #[cfg(not(feature = "perf-trace"))]
         let _ = (build_elapsed, before_submit_elapsed, send_elapsed, total_elapsed);
 

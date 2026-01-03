@@ -9,7 +9,7 @@ use crate::swqos::{SwqosClient, TradeType};
 use crate::trading::common::get_multi_token_balances;
 use crate::trading::MiddlewareManager;
 use solana_hash::Hash;
-use solana_sdk::message::AddressLookupTableAccount;
+use solana_sdk::message::{AddressLookupTableAccount, Instruction};
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use std::sync::Arc;
 use anyhow::anyhow;
@@ -74,6 +74,22 @@ pub struct SwapParams {
     pub fixed_output_amount: Option<u64>,
     pub gas_fee_strategy: GasFeeStrategy,
     pub simulate: bool,
+}
+
+#[derive(Clone)]
+pub struct ArbSwapParams {
+    pub rpc: Option<Arc<SolanaRpcClient>>,
+    pub payer: Arc<Keypair>,
+    pub address_lookup_table_account: Option<AddressLookupTableAccount>,
+    pub recent_blockhash: Option<Hash>,
+    pub open_seed_optimize: bool,
+    pub swqos_clients: Vec<Arc<SwqosClient>>,
+    pub middleware_manager: Option<Arc<MiddlewareManager>>,
+    pub durable_nonce: Option<DurableNonceInfo>,
+    pub with_tip: bool,
+    pub gas_fee_strategy: GasFeeStrategy,
+    pub simulate: bool,
+    pub instructions: Vec<Instruction>
 }
 
 impl std::fmt::Debug for SwapParams {

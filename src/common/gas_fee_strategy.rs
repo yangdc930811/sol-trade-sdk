@@ -309,6 +309,19 @@ impl GasFeeStrategy {
         });
     }
 
+    /// 动态更新买入cu（保持其他参数不变）
+    pub fn update_buy_cu(&self, buy_cu_limit: u32) {
+        self.strategies.rcu(|current_map| {
+            let mut new_map = (**current_map).clone();
+            for ((swqos_type, trade_type, strategy_type), value) in new_map.iter_mut() {
+                if *trade_type == TradeType::Buy {
+                    value.cu_limit = buy_cu_limit;
+                }
+            }
+            Arc::new(new_map)
+        });
+    }
+
     /// 动态更新卖出小费（保持其他参数不变）
     /// Dynamically update sell tip (keep other parameters unchanged)
     pub fn update_sell_tip(&self, sell_tip: f64) {

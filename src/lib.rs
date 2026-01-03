@@ -591,7 +591,6 @@ impl TradingClient {
         business_instructions: Vec<Instruction>,
         address_lookup_table_account: Option<AddressLookupTableAccount>,
         recent_blockhash: Option<Hash>,
-        data_size_limit: u32,
         is_simulate: bool,
     ) -> AnyResult<Signature> {
         let transaction = build_transaction(
@@ -601,7 +600,6 @@ impl TradingClient {
             business_instructions,
             address_lookup_table_account,
             recent_blockhash,
-            data_size_limit,
         )?;
 
         let signature = transaction
@@ -687,12 +685,6 @@ impl TradingClient {
             slippage_basis_points: params.slippage_basis_points,
             address_lookup_table_account: params.address_lookup_table_account,
             recent_blockhash: params.recent_blockhash,
-            data_size_limit: params
-                .gas_fee_strategy
-                .get_strategies(TradeType::Buy)
-                .get(0)
-                .map(|(_, _, v)| v.data_size_limit)
-                .unwrap_or(256 * 1024),
             wait_transaction_confirmed: params.wait_transaction_confirmed,
             protocol_params: protocol_params.clone(),
             open_seed_optimize: self.use_seed_optimize, // 使用全局seed优化配置

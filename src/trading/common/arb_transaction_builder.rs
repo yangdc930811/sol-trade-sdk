@@ -23,7 +23,6 @@ pub fn build_transaction(
     business_instructions: Vec<Instruction>,
     address_lookup_table_account: Option<AddressLookupTableAccount>,
     recent_blockhash: Option<Hash>,
-    data_size_limit: u32,
 ) -> Result<VersionedTransaction, anyhow::Error> {
     let mut instructions = Vec::with_capacity(business_instructions.len() + 5);
 
@@ -31,8 +30,6 @@ pub fn build_transaction(
     instructions.extend(compute_budget_instructions(
         unit_price,
         unit_limit,
-        data_size_limit,
-        true,
     ));
 
     // Add business instructions

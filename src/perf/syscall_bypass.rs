@@ -132,7 +132,7 @@ impl FastTimeProvider {
             vdso_enabled: enable_vdso,
         };
         
-        log::info!("🚀 Fast time provider initialized with vDSO: {}", enable_vdso);
+        log::debug!("🚀 Fast time provider initialized with vDSO: {}", enable_vdso);
         Ok(provider)
     }
     
@@ -233,7 +233,7 @@ impl IOOptimizer {
     pub fn new(_config: &SyscallBypassConfig) -> Result<Self> {
         let io_uring_available = Self::check_io_uring_support();
         
-        log::info!("🚀 I/O Optimizer initialized - io_uring: {}", io_uring_available);
+        log::debug!("🚀 I/O Optimizer initialized - io_uring: {}", io_uring_available);
         
         Ok(Self {
             io_uring_available,
@@ -249,7 +249,7 @@ impl IOOptimizer {
             // 检查内核版本和io_uring支持
             if let Ok(uname) = std::process::Command::new("uname").arg("-r").output() {
                 let kernel_version = String::from_utf8_lossy(&uname.stdout);
-                log::info!("Kernel version: {}", kernel_version.trim());
+                log::debug!("Kernel version: {}", kernel_version.trim());
                 
                 // 简单检查：内核版本 >= 5.1 支持io_uring
                 if let Some(version_str) = kernel_version.split('.').next() {
@@ -362,7 +362,7 @@ impl IOOptimizer {
                 
                 self.mmap_regions.push(region);
                 
-                log::info!("✅ Memory mapped I/O created: {} bytes at {:p}", size, addr);
+                log::debug!("✅ Memory mapped I/O created: {} bytes at {:p}", size, addr);
                 Ok(addr as usize)
             }
         }
@@ -390,7 +390,7 @@ impl SyscallBatchProcessor {
         let pending_calls = crossbeam_queue::ArrayQueue::new(batch_size * 10);
         let executor = tokio::runtime::Handle::current();
         
-        log::info!("🚀 Syscall batch processor created with batch size: {}", batch_size);
+        log::debug!("🚀 Syscall batch processor created with batch size: {}", batch_size);
         
         Ok(Self {
             pending_calls,
@@ -515,11 +515,11 @@ impl SystemCallBypassManager {
         let io_optimizer = Arc::new(IOOptimizer::new(&config)?);
         let stats = Arc::new(SyscallBypassStats::default());
         
-        log::info!("🚀 System Call Bypass Manager initialized");
-        log::info!("   📦 Batch Processing: {}", config.enable_batch_processing);
-        log::info!("   ⏰ Fast Time: {}", config.enable_fast_time);
-        log::info!("   🚀 vDSO: {}", config.enable_vdso);
-        log::info!("   📁 io_uring: {}", config.enable_io_uring);
+        log::debug!("🚀 System Call Bypass Manager initialized");
+        log::debug!("   📦 Batch Processing: {}", config.enable_batch_processing);
+        log::debug!("   ⏰ Fast Time: {}", config.enable_fast_time);
+        log::debug!("   🚀 vDSO: {}", config.enable_vdso);
+        log::debug!("   📁 io_uring: {}", config.enable_io_uring);
         
         Ok(Self {
             config,
@@ -626,7 +626,7 @@ impl SystemCallBypassManager {
             }
         });
         
-        log::info!("✅ Batch processing worker started");
+        log::debug!("✅ Batch processing worker started");
         Ok(())
     }
     
@@ -669,16 +669,16 @@ pub struct SyscallBypassStatsSnapshot {
 impl SyscallBypassStatsSnapshot {
     /// 打印统计信息
     pub fn print_stats(&self) {
-        log::info!("📊 System Call Bypass Stats:");
-        log::info!("   🚫 Syscalls Bypassed: {}", self.syscalls_bypassed);
-        log::info!("   📦 Syscalls Batched: {}", self.syscalls_batched);
-        log::info!("   ⏰ Time Calls Cached: {}", self.time_calls_cached);
-        log::info!("   📁 I/O Operations Optimized: {}", self.io_operations_optimized);
-        log::info!("   💾 Memory Operations Avoided: {}", self.memory_operations_avoided);
+        log::debug!("📊 System Call Bypass Stats:");
+        log::debug!("   🚫 Syscalls Bypassed: {}", self.syscalls_bypassed);
+        log::debug!("   📦 Syscalls Batched: {}", self.syscalls_batched);
+        log::debug!("   ⏰ Time Calls Cached: {}", self.time_calls_cached);
+        log::debug!("   📁 I/O Operations Optimized: {}", self.io_operations_optimized);
+        log::debug!("   💾 Memory Operations Avoided: {}", self.memory_operations_avoided);
         
         let total_optimizations = self.syscalls_bypassed + self.time_calls_cached + 
                                  self.io_operations_optimized + self.memory_operations_avoided;
-        log::info!("   🏆 Total Optimizations: {}", total_optimizations);
+        log::debug!("   🏆 Total Optimizations: {}", total_optimizations);
     }
 }
 

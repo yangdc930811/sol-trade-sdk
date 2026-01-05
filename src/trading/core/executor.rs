@@ -154,7 +154,7 @@ impl TradeExecutor for GenericTradeExecutor {
         #[cfg(feature = "perf-trace")]
         {
             let timestamp_ns = SYSCALL_BYPASS.fast_timestamp_nanos();
-            log::trace!(
+            log::info!(
                 "[Execute] timestamp_ns={} build_us={} before_submit_us={} send_us={} total_us={}",
                 timestamp_ns,
                 build_elapsed.as_micros(),
@@ -263,7 +263,7 @@ impl TradeExecutor for GenericTradeExecutor {
         #[cfg(feature = "perf-trace")]
         {
             let timestamp_ns = SYSCALL_BYPASS.fast_timestamp_nanos();
-            log::trace!(
+            log::info!(
                 "[Execute] timestamp_ns={} build_us={} before_submit_us={} send_us={} total_us={}",
                 timestamp_ns,
                 build_elapsed.as_micros(),
@@ -335,8 +335,7 @@ async fn simulate_transaction(
         &Pubkey::default(),
         tip,
         durable_nonce,
-    )
-        .await?;
+    )?;
 
     // 打印原始交易数据
     let bytes = transaction.message.serialize();

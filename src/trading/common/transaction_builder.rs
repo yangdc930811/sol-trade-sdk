@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Build standard RPC transaction
-pub async fn build_transaction(
+pub fn build_transaction(
     payer: Arc<Keypair>,
     rpc: Option<Arc<SolanaRpcClient>>,
     unit_limit: u32,
@@ -74,11 +74,10 @@ pub async fn build_transaction(
         protocol_name,
         is_buy,
     )
-    .await
 }
 
 /// Low-level function for building versioned transactions
-async fn build_versioned_transaction(
+fn build_versioned_transaction(
     payer: Arc<Keypair>,
     instructions: Vec<Instruction>,
     address_lookup_table_account: Option<AddressLookupTableAccount>,

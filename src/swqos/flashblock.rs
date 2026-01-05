@@ -66,6 +66,8 @@ impl FlashBlockClient {
         let start_time = Instant::now();
         let (content, signature) = serialize_transaction_and_encode(transaction, UiTransactionEncoding::Base64).await?;
 
+        println!(" [FlashBlock] {} serialize_transaction_and_encode: {:?}", trade_type, start_time.elapsed());
+
         // FlashBlock API format
         let request_body = serde_json::to_string(&json!({
             "transactions": [content]

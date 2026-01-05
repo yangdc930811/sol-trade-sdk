@@ -9,7 +9,7 @@ use solana_sdk::{
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{str::FromStr, sync::Arc, time::Instant};
-
+use std::time::Duration;
 use crate::{
     common::nonce_cache::DurableNonceInfo,
     common::{GasFeeStrategy, SolanaRpcClient},
@@ -336,7 +336,6 @@ pub async fn execute_parallel(
                 tip_amount,
                 durable_nonce,
             )
-                .await
             {
                 Ok(transaction) => {
                     if let Some(signature) = transaction.signatures.first() {
@@ -399,6 +398,7 @@ pub async fn execute_parallel(
     // All tasks spawned
 
     if !wait_transaction_confirmed {
+        tokio::time::sleep(Duration::from_millis(10)).await;
         if let Some(result) = collector.get_first() {
             return Ok(result);
         }

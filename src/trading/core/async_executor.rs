@@ -180,7 +180,6 @@ impl ResultCollector {
         let mut last_error = None;
 
         while let Some(result) = self.results.pop() {
-            signatures.push(result.signature);
             if result.success {
                 has_success = true;
             }
@@ -400,7 +399,6 @@ pub async fn execute_parallel(
     // All tasks spawned
 
     if !wait_transaction_confirmed {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         if let Some(result) = collector.get_first() {
             return Ok(result);
         }

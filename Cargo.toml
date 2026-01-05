@@ -18,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
+perf-trace = []
 
 [dependencies]
 sol-common = { path = "../sol-common" }

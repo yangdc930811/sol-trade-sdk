@@ -239,7 +239,7 @@ impl TradeExecutor for GenericTradeExecutor {
         }
 
         // 并行发送交易
-        let send_start = Instant::now();
+        // let send_start = Instant::now();
         let result = execute_parallel(
             params.swqos_clients.clone(),
             params.payer,
@@ -256,25 +256,25 @@ impl TradeExecutor for GenericTradeExecutor {
             params.gas_fee_strategy,
         )
             .await;
-        let send_elapsed = send_start.elapsed();
-        let total_elapsed = total_start.elapsed();
-
-        // Get performance metrics using fast timestamp
-        #[cfg(feature = "perf-trace")]
-        {
-            let timestamp_ns = SYSCALL_BYPASS.fast_timestamp_nanos();
-            log::info!(
-                "[Execute] timestamp_ns={} build_us={} before_submit_us={} send_us={} total_us={}",
-                timestamp_ns,
-                build_elapsed.as_micros(),
-                before_submit_elapsed.as_micros(),
-                send_elapsed.as_micros(),
-                total_elapsed.as_micros()
-            );
-        }
-
-        #[cfg(not(feature = "perf-trace"))]
-        let _ = (build_elapsed, before_submit_elapsed, send_elapsed, total_elapsed);
+        // let send_elapsed = send_start.elapsed();
+        // let total_elapsed = total_start.elapsed();
+        //
+        // // Get performance metrics using fast timestamp
+        // #[cfg(feature = "perf-trace")]
+        // {
+        //     let timestamp_ns = SYSCALL_BYPASS.fast_timestamp_nanos();
+        //     log::info!(
+        //         "[Execute] timestamp_ns={} build_us={} before_submit_us={} send_us={} total_us={}",
+        //         timestamp_ns,
+        //         build_elapsed.as_micros(),
+        //         before_submit_elapsed.as_micros(),
+        //         send_elapsed.as_micros(),
+        //         total_elapsed.as_micros()
+        //     );
+        // }
+        //
+        // #[cfg(not(feature = "perf-trace"))]
+        // let _ = (build_elapsed, before_submit_elapsed, send_elapsed, total_elapsed);
 
         result
     }

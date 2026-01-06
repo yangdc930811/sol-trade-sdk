@@ -31,8 +31,6 @@ pub fn build_transaction(
     tip_account: &Pubkey,
     tip_amount: f64,
     durable_nonce: Option<DurableNonceInfo>,
-    // nonce_account: Option<Pubkey>,
-    // current_nonce: Option<Hash>,
 ) -> Result<VersionedTransaction, anyhow::Error> {
     let mut instructions = Vec::with_capacity(business_instructions.len() + 5);
 

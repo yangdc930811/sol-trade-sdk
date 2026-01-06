@@ -7,7 +7,7 @@ use solana_sdk::pubkey::Pubkey;
 use tracing::error;
 
 /// DurableNonceInfo structure to store durable nonce-related information
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DurableNonceInfo {
     /// Nonce account address
     pub nonce_account: Option<Pubkey>,

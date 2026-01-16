@@ -10,6 +10,7 @@ use solana_sdk::{
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{str::FromStr, sync::Arc, time::Instant};
 use std::time::Duration;
+use log::{info, warn};
 use crate::{
     common::nonce_cache::DurableNonceInfo,
     common::{GasFeeStrategy, SolanaRpcClient},
@@ -291,11 +292,6 @@ pub async fn execute_parallel(
         return Err(anyhow!("Multiple swqos transactions require durable_nonce to be set.",));
     }
 
-    // Task preparation completed
-
-    let collector = Arc::new(ResultCollector::new(task_configs.len()));
-    let _spawn_start = Instant::now();
-
     for (i, swqos_client, gas_fee_strategy_config) in task_configs {
         let core_id = cores[i % cores.len()];
         let payer = payer.clone();
@@ -304,7 +300,6 @@ pub async fn execute_parallel(
         let swqos_type = swqos_client.get_swqos_type();
         let tip_account_str = swqos_client.get_tip_account()?;
         let tip_account = Arc::new(Pubkey::from_str(&tip_account_str).unwrap_or_default());
-        let collector = collector.clone();
 
         let tip = gas_fee_strategy_config.2.tip;
         let unit_limit = gas_fee_strategy_config.2.cu_limit;
@@ -314,7 +309,6 @@ pub async fn execute_parallel(
         let address_lookup_table_account = address_lookup_table_account.clone();
 
         tokio::spawn(async move {
-            let _task_start = Instant::now();
             core_affinity::set_for_current(core_id);
 
             let tip_amount = if with_tip { tip } else { 0.0 };
@@ -338,76 +332,32 @@ pub async fn execute_parallel(
             )
             {
                 Ok(transaction) => {
-                    if let Some(signature) = transaction.signatures.first() {
-                        // 缓存signature
-                        collector.record_signature(signature.clone());
-                    }
-
                     // Transaction built
+                    #[cfg(feature = "perf-trace")]
+                    {
+                        info!("----> build_transaction: {:?}", _build_start.elapsed().as_micros());
+                    }
                     let _send_start = Instant::now();
-                    let mut err: Option<anyhow::Error> = None;
-                    let mut landed_on_chain = false;
-                    let success = match swqos_client
+                    let _ = swqos_client
                         .send_transaction(
                             if is_buy { TradeType::Buy } else { TradeType::Sell },
                             &transaction,
                             wait_transaction_confirmed,
                         )
-                        .await
+                        .await;
+
+                    #[cfg(feature = "perf-trace")]
                     {
-                        Ok(()) => {
-                            landed_on_chain = true;  // Success means tx confirmed on-chain
-                            true
-                        }
-                        Err(e) => {
-                            // Check if this error indicates the tx landed but failed (e.g., ExceededSlippage)
-                            landed_on_chain = is_landed_error(&e);
-                            err = Some(e);
-                            // Send transaction failed
-                            false
-                        }
-                    };
-
-                    // Transaction sent
-
-                    if let Some(signature) = transaction.signatures.first() {
-                        collector.submit(TaskResult {
-                            success,
-                            signature: *signature,
-                            error: err,
-                            swqos_type,  // 🔧 记录SWQOS类型
-                            landed_on_chain,  // 🔧 Whether tx landed (even if it failed)
-                        });
+                        info!("----> send_transaction: {:?}", _send_start.elapsed().as_micros());
                     }
                 }
                 Err(e) => {
-                    // Build transaction failed
-                    collector.submit(TaskResult {
-                        success: false,
-                        signature: Signature::default(),
-                        error: Some(e),
-                        swqos_type,  // 🔧 记录SWQOS类型
-                        landed_on_chain: false,  // Build failed, tx never sent
-                    });
+                    warn!("build_transaction failed: {}", e);
                     return;
                 }
             };
         });
     }
 
-    // All tasks spawned
-
-    if !wait_transaction_confirmed {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if let Some(result) = collector.get_first() {
-            return Ok(result);
-        }
-        return Err(anyhow!("No transaction signature available"));
-    }
-
-    if let Some(result) = collector.wait_for_success().await {
-        Ok(result)
-    } else {
-        Err(anyhow!("All transactions failed"))
-    }
+    Ok((true, vec![], None))
 }

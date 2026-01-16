@@ -701,7 +701,7 @@ impl TradingClient {
             instructions: params.instructions,
         };
 
-        let swap_result = executor.swap_arb(swap_params).await;
+        let swap_result = executor.swap_strategy(swap_params).await;
         let result =
             swap_result.map(|(success, sigs, err)| (success, sigs, err.map(TradeError::from)));
         return result;

@@ -22,7 +22,6 @@ perf-trace = []
 
 [dependencies]
 sol-common = { path = "../sol-common" }
-solana-streamer = { path = "../solana-streamer" }
 
 solana-sdk = {workspace = true}
 solana-program = {workspace = true}

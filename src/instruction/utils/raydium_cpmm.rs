@@ -5,7 +5,6 @@ use crate::{
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
 use sol_common::protocols::raydium_cpmm::PoolState;
-use solana_streamer::streaming::event_parser::protocols::raydium_cpmm::types::{pool_state_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {
@@ -35,19 +34,6 @@ pub mod accounts {
 
 pub const SWAP_BASE_IN_DISCRIMINATOR: &[u8] = &[143, 190, 90, 218, 196, 30, 51, 222];
 pub const SWAP_BASE_OUT_DISCRIMINATOR: &[u8] = &[55, 217, 98, 86, 163, 74, 180, 173];
-
-pub async fn fetch_pool_state(
-    rpc: &SolanaRpcClient,
-    pool_address: &Pubkey,
-) -> Result<PoolState, anyhow::Error> {
-    let account = rpc.get_account(pool_address).await?;
-    if account.owner != accounts::RAYDIUM_CPMM {
-        return Err(anyhow!("Account is not owned by Raydium Cpmm program"));
-    }
-    let pool_state = pool_state_decode(&account.data[8..])
-        .ok_or_else(|| anyhow!("Failed to decode pool state"))?;
-    Ok(pool_state)
-}
 
 pub fn get_pool_pda(amm_config: &Pubkey, mint1: &Pubkey, mint2: &Pubkey) -> Option<Pubkey> {
     let seeds: &[&[u8]; 4] =

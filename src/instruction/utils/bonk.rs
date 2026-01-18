@@ -4,7 +4,6 @@ use crate::{
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
 use sol_common::protocols::bonk::PoolState;
-use solana_streamer::streaming::event_parser::protocols::bonk::{pool_state_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {
@@ -59,19 +58,6 @@ pub mod accounts {
 
 pub const BUY_EXECT_IN_DISCRIMINATOR: [u8; 8] = [250, 234, 13, 123, 213, 156, 19, 236];
 pub const SELL_EXECT_IN_DISCRIMINATOR: [u8; 8] = [149, 39, 222, 155, 211, 124, 152, 26];
-
-pub async fn fetch_pool_state(
-    rpc: &SolanaRpcClient,
-    pool_address: &Pubkey,
-) -> Result<PoolState, anyhow::Error> {
-    let account = rpc.get_account(pool_address).await?;
-    if account.owner != accounts::BONK {
-        return Err(anyhow!("Account is not owned by Bonk program"));
-    }
-    let pool_state = pool_state_decode(&account.data[8..])
-        .ok_or_else(|| anyhow!("Failed to decode pool state"))?;
-    Ok(pool_state)
-}
 
 pub fn get_amount_in_net(
     amount_in: u64,

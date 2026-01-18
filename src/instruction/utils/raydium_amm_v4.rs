@@ -4,7 +4,6 @@ use crate::{
 use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
 use sol_common::protocols::raydium_amm_v4::AmmInfo;
-use solana_streamer::streaming::event_parser::protocols::raydium_amm_v4::types::{amm_info_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {
@@ -34,10 +33,3 @@ pub mod accounts {
 
 pub const SWAP_BASE_IN_DISCRIMINATOR: &[u8] = &[9];
 pub const SWAP_BASE_OUT_DISCRIMINATOR: &[u8] = &[11];
-
-pub async fn fetch_amm_info(rpc: &SolanaRpcClient, amm: Pubkey) -> Result<AmmInfo, anyhow::Error> {
-    let amm_info = rpc.get_account_data(&amm).await?;
-    let amm_info =
-        amm_info_decode(&amm_info).ok_or_else(|| anyhow!("Failed to decode amm info"))?;
-    Ok(amm_info)
-}

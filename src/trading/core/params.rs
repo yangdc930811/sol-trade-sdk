@@ -89,7 +89,7 @@ pub struct ArbSwapParams {
     pub with_tip: bool,
     pub gas_fee_strategy: GasFeeStrategy,
     pub simulate: bool,
-    pub instructions: Vec<Instruction>
+    pub instructions: Vec<Instruction>,
 }
 
 impl std::fmt::Debug for SwapParams {
@@ -286,73 +286,6 @@ impl PumpSwapParams {
             is_mayhem_mode,
         }
     }
-
-    pub async fn from_mint_by_rpc(
-        rpc: &SolanaRpcClient,
-        mint: &Pubkey,
-    ) -> Result<Self, anyhow::Error> {
-        if let Ok((pool_address, _)) =
-            crate::instruction::utils::pumpswap::find_by_base_mint(rpc, mint).await
-        {
-            Self::from_pool_address_by_rpc(rpc, &pool_address).await
-        } else if let Ok((pool_address, _)) =
-            crate::instruction::utils::pumpswap::find_by_quote_mint(rpc, mint).await
-        {
-            Self::from_pool_address_by_rpc(rpc, &pool_address).await
-        } else {
-            return Err(anyhow::anyhow!("No pool found for mint"));
-        }
-    }
-
-    pub async fn from_pool_address_by_rpc(
-        rpc: &SolanaRpcClient,
-        pool_address: &Pubkey,
-    ) -> Result<Self, anyhow::Error> {
-        let pool_data = crate::instruction::utils::pumpswap::fetch_pool(rpc, pool_address).await?;
-        let (pool_base_token_reserves, pool_quote_token_reserves) =
-            crate::instruction::utils::pumpswap::get_token_balances(&pool_data, rpc).await?;
-        let creator = pool_data.coin_creator;
-        let coin_creator_vault_ata = crate::instruction::utils::pumpswap::coin_creator_vault_ata(
-            creator,
-            pool_data.quote_mint,
-        ).ok_or_else(|| anyhow!("coin_creator_vault_ata empty"))?;
-
-        let coin_creator_vault_authority =
-            crate::instruction::utils::pumpswap::coin_creator_vault_authority(creator)
-                .ok_or_else(|| anyhow!("coin_creator_vault_authority empty"))?;;
-
-        let base_token_program_ata = get_associated_token_address_with_program_id(
-            &pool_address,
-            &pool_data.base_mint,
-            &crate::constants::TOKEN_PROGRAM,
-        );
-        let quote_token_program_ata = get_associated_token_address_with_program_id(
-            &pool_address,
-            &pool_data.quote_mint,
-            &crate::constants::TOKEN_PROGRAM,
-        );
-
-        Ok(Self {
-            pool: pool_address.clone(),
-            base_mint: pool_data.base_mint,
-            quote_mint: pool_data.quote_mint,
-            pool_base_token_account: pool_data.pool_base_token_account,
-            pool_quote_token_account: pool_data.pool_quote_token_account,
-            coin_creator_vault_ata: coin_creator_vault_ata,
-            coin_creator_vault_authority: coin_creator_vault_authority,
-            base_token_program: if pool_data.pool_base_token_account == base_token_program_ata {
-                crate::constants::TOKEN_PROGRAM
-            } else {
-                crate::constants::TOKEN_PROGRAM_2022
-            },
-            quote_token_program: if pool_data.pool_quote_token_account == quote_token_program_ata {
-                crate::constants::TOKEN_PROGRAM
-            } else {
-                crate::constants::TOKEN_PROGRAM_2022
-            },
-            is_mayhem_mode: pool_data.is_mayhem_mode,
-        })
-    }
 }
 
 /// Bonk protocol specific parameters
@@ -488,47 +421,6 @@ impl BonkParams {
             global_config: global_config,
         }
     }
-
-    pub async fn from_mint_by_rpc(
-        rpc: &SolanaRpcClient,
-        mint: &Pubkey,
-        usd1_pool: bool,
-    ) -> Result<Self, anyhow::Error> {
-        let pool_address = crate::instruction::utils::bonk::get_pool_pda(
-            mint,
-            if usd1_pool {
-                &crate::constants::USD1_TOKEN_ACCOUNT
-            } else {
-                &crate::constants::WSOL_TOKEN_ACCOUNT
-            },
-        )
-            .unwrap();
-        let pool_data =
-            crate::instruction::utils::bonk::fetch_pool_state(rpc, &pool_address).await?;
-        let token_account = rpc.get_account(&pool_data.base_mint).await?;
-        let platform_associated_account =
-            crate::instruction::utils::bonk::get_platform_associated_account(
-                &pool_data.platform_config,
-            );
-        let creator_associated_account =
-            crate::instruction::utils::bonk::get_creator_associated_account(&pool_data.creator);
-        let platform_associated_account = platform_associated_account.unwrap();
-        let creator_associated_account = creator_associated_account.unwrap();
-        Ok(Self {
-            virtual_base: pool_data.virtual_base as u128,
-            virtual_quote: pool_data.virtual_quote as u128,
-            real_base: pool_data.real_base as u128,
-            real_quote: pool_data.real_quote as u128,
-            pool_state: pool_address,
-            base_vault: pool_data.base_vault,
-            quote_vault: pool_data.quote_vault,
-            mint_token_program: token_account.owner,
-            platform_config: pool_data.platform_config,
-            platform_associated_account,
-            creator_associated_account,
-            global_config: pool_data.global_config,
-        })
-    }
 }
 
 /// RaydiumCpmm protocol specific parameters
@@ -571,23 +463,6 @@ impl RaydiumCpmmParams {
             observation_state: observation_state,
         }
     }
-
-    pub async fn from_pool_address_by_rpc(
-        rpc: &SolanaRpcClient,
-        pool_address: &Pubkey,
-    ) -> Result<Self, anyhow::Error> {
-        let pool =
-            crate::instruction::utils::raydium_cpmm::fetch_pool_state(rpc, pool_address).await?;
-        Ok(Self {
-            pool: pool_address.clone(),
-            amm_config: pool.amm_config,
-            token_mint_0: pool.token0_mint,
-            token_mint_1: pool.token1_mint,
-            token_vault_0: pool.token0_vault,
-            token_vault_1: pool.token1_vault,
-            observation_state: pool.observation_key,
-        })
-    }
 }
 
 /// RaydiumCpmm protocol specific parameters
@@ -615,21 +490,6 @@ impl RaydiumAmmV4Params {
         quote_vault: Pubkey,
     ) -> Self {
         Self { amm, base_mint, quote_mint, base_vault, quote_vault }
-    }
-    pub async fn from_amm_address_by_rpc(
-        rpc: &SolanaRpcClient,
-        amm: Pubkey,
-    ) -> Result<Self, anyhow::Error> {
-        let amm_info = crate::instruction::utils::raydium_amm_v4::fetch_amm_info(rpc, amm).await?;
-        let (base_reserve, quote_reserve) =
-            get_multi_token_balances(rpc, &amm_info.base_vault, &amm_info.quote_vault).await?;
-        Ok(Self {
-            amm,
-            base_mint: amm_info.base_mint,
-            quote_mint: amm_info.quote_mint,
-            base_vault: amm_info.base_vault,
-            quote_vault: amm_info.quote_vault,
-        })
     }
 }
 
@@ -665,23 +525,6 @@ impl MeteoraDammV2Params {
             token_a_program,
             token_b_program,
         }
-    }
-
-    pub async fn from_pool_address_by_rpc(
-        rpc: &SolanaRpcClient,
-        pool_address: &Pubkey,
-    ) -> Result<Self, anyhow::Error> {
-        let pool_data =
-            crate::instruction::utils::meteora_damm_v2::fetch_pool(rpc, pool_address).await?;
-        Ok(Self {
-            pool: pool_address.clone(),
-            token_a_vault: pool_data.token_a_vault,
-            token_b_vault: pool_data.token_b_vault,
-            token_a_mint: pool_data.token_a_mint,
-            token_b_mint: pool_data.token_b_mint,
-            token_a_program: TOKEN_PROGRAM,
-            token_b_program: TOKEN_PROGRAM,
-        })
     }
 }
 

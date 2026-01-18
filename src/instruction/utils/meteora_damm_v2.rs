@@ -1,10 +1,4 @@
-use crate::{
-    common::SolanaRpcClient,
-};
-use anyhow::anyhow;
 use solana_sdk::pubkey::Pubkey;
-use sol_common::protocols::meteora_damm_v2::types::Pool;
-use solana_streamer::streaming::event_parser::protocols::meteora_damm_v2::types::{pool_decode};
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {
@@ -44,18 +38,6 @@ pub mod accounts {
 }
 
 pub const SWAP_DISCRIMINATOR: &[u8] = &[248, 198, 158, 145, 225, 117, 135, 200];
-
-pub async fn fetch_pool(
-    rpc: &SolanaRpcClient,
-    pool_address: &Pubkey,
-) -> Result<Pool, anyhow::Error> {
-    let account = rpc.get_account(pool_address).await?;
-    if account.owner != accounts::METEORA_DAMM_V2 {
-        return Err(anyhow!("Account is not owned by Meteora Damm V2 program"));
-    }
-    let pool = pool_decode(&account.data[8..]).ok_or_else(|| anyhow!("Failed to decode pool"))?;
-    Ok(pool)
-}
 
 #[inline]
 pub fn get_event_authority_pda() -> Pubkey {

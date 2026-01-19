@@ -261,7 +261,7 @@ pub const SWQOS_ENDPOINTS_SOYAS: [&str; 8] = [
 ];
 
 pub const SWQOS_MIN_TIP_DEFAULT: f64 = 0.00001; // 其它SWQOS默认最低小费
-pub const SWQOS_MIN_TIP_JITO: f64 = 0.00001;
+pub const SWQOS_MIN_TIP_JITO: f64 = 0.000001;
 pub const SWQOS_MIN_TIP_NEXTBLOCK: f64 = 0.001;
 pub const SWQOS_MIN_TIP_ZERO_SLOT: f64 = 0.0001;
 pub const SWQOS_MIN_TIP_TEMPORAL: f64 = 0.0001;

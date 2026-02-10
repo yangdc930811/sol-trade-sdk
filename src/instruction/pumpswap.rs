@@ -2,7 +2,7 @@ use crate::{
     constants::trade::trade::DEFAULT_SLIPPAGE,
     instruction::utils::pumpswap::{
         accounts, fee_recipient_ata, get_user_volume_accumulator_pda, BUY_DISCRIMINATOR,
-        SELL_DISCRIMINATOR,
+        BUY_EXACT_QUOTE_IN_DISCRIMINATOR, SELL_DISCRIMINATOR,
     },
     trading::{
         common::wsol_manager,
@@ -142,7 +142,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
 
         // Create instruction data
         let mut data = [0u8; 24];
-        data[..8].copy_from_slice(&BUY_DISCRIMINATOR);
+        data[..8].copy_from_slice(&BUY_EXACT_QUOTE_IN_DISCRIMINATOR);
         // amount_in
         data[8..16].copy_from_slice(&params.input_amount.unwrap().to_le_bytes());
         // amount_output

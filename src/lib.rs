@@ -7,7 +7,7 @@ pub mod trading;
 pub mod utils;
 use crate::common::nonce_cache::DurableNonceInfo;
 use crate::common::{AnyResult, GasFeeStrategy};
-use crate::common::TradeConfig;
+use crate::common::{TradeConfig, InfrastructureConfig};
 use crate::constants::trade::trade::DEFAULT_SLIPPAGE;
 use crate::constants::SOL_TOKEN_ACCOUNT;
 use crate::constants::USD1_TOKEN_ACCOUNT;
@@ -52,6 +52,73 @@ pub enum TradeTokenType {
     USDC,
 }
 
+/// Shared infrastructure components that can be reused across multiple wallets
+///
+/// This struct holds the expensive-to-initialize components (RPC client, SWQOS clients)
+/// that are wallet-independent and can be shared when only the trading wallet changes.
+pub struct TradingInfrastructure {
+    /// Shared RPC client for blockchain interactions
+    pub rpc: Arc<SolanaRpcClient>,
+    /// Shared SWQOS clients for transaction priority and routing
+    pub swqos_clients: Vec<Arc<SwqosClient>>,
+    /// Configuration used to create this infrastructure
+    pub config: InfrastructureConfig,
+}
+
+impl TradingInfrastructure {
+    /// Create new shared infrastructure from configuration
+    ///
+    /// This performs the expensive initialization:
+    /// - Creates RPC client with connection pool
+    /// - Creates SWQOS clients (each with their own HTTP client)
+    /// - Initializes rent cache and starts background updater
+    pub async fn new(config: InfrastructureConfig) -> Self {
+        // Install crypto provider (idempotent)
+        if CryptoProvider::get_default().is_none() {
+            let _ = default_provider()
+                .install_default()
+                .map_err(|e| anyhow::anyhow!("Failed to install crypto provider: {:?}", e));
+        }
+
+        // Create RPC client
+        let rpc = Arc::new(SolanaRpcClient::new_with_commitment(
+            config.rpc_url.clone(),
+            config.commitment.clone(),
+        ));
+
+        // Initialize rent cache and start background updater
+        common::seed::update_rents(&rpc).await.unwrap();
+        common::seed::start_rent_updater(rpc.clone());
+
+        // Create SWQOS clients with blacklist checking
+        let mut swqos_clients: Vec<Arc<SwqosClient>> = vec![];
+        for swqos in &config.swqos_configs {
+            // Check blacklist, skip disabled providers
+            if swqos.is_blacklisted() {
+                eprintln!("\u{26a0}\u{fe0f} SWQOS {:?} is blacklisted, skipping", swqos.swqos_type());
+                continue;
+            }
+            match SwqosConfig::get_swqos_client(
+                config.rpc_url.clone(),
+                config.commitment.clone(),
+                swqos.clone(),
+            ).await {
+                Ok(swqos_client) => swqos_clients.push(swqos_client),
+                Err(err) => eprintln!(
+                    "failed to create {:?} swqos client: {err}. Excluding from swqos list",
+                    swqos.swqos_type()
+                ),
+            }
+        }
+
+        Self {
+            rpc,
+            swqos_clients,
+            config,
+        }
+    }
+}
+
 /// Main trading client for Solana DeFi protocols
 ///
 /// `SolTradingSDK` provides a unified interface for trading across multiple Solana DEXs
@@ -60,10 +127,9 @@ pub enum TradeTokenType {
 pub struct TradingClient {
     /// The keypair used for signing all transactions
     pub payer: Arc<Keypair>,
-    /// RPC client for blockchain interactions
-    pub rpc: Arc<SolanaRpcClient>,
-    /// SWQOS clients for transaction priority and routing
-    pub swqos_clients: Vec<Arc<SwqosClient>>,
+    /// Shared infrastructure (RPC client, SWQOS clients)
+    /// Can be shared across multiple TradingClient instances with different wallets
+    pub infrastructure: Arc<TradingInfrastructure>,
     /// Optional middleware manager for custom transaction processing
     pub middleware_manager: Option<Arc<MiddlewareManager>>,
     /// Whether to use seed optimization for all ATA operations (default: true)
@@ -80,8 +146,7 @@ impl Clone for TradingClient {
     fn clone(&self) -> Self {
         Self {
             payer: self.payer.clone(),
-            rpc: self.rpc.clone(),
-            swqos_clients: self.swqos_clients.clone(),
+            infrastructure: self.infrastructure.clone(),
             middleware_manager: self.middleware_manager.clone(),
             use_seed_optimize: self.use_seed_optimize,
         }
@@ -130,6 +195,11 @@ pub struct TradeBuyParams {
     pub simulate: bool,
     pub input_token_program: Pubkey,
     pub output_token_program: Pubkey,
+    /// Use exact SOL amount instructions (buy_exact_sol_in for PumpFun, buy_exact_quote_in for PumpSwap).
+    /// When Some(true) or None (default), the exact SOL/quote amount is spent and slippage is applied to output tokens.
+    /// When Some(false), uses regular buy instruction where slippage is applied to SOL/quote input.
+    /// This option only applies to PumpFun and PumpSwap DEXes; it is ignored for other DEXes.
+    pub use_exact_sol_amount: Option<bool>,
 }
 
 /// Parameters for executing sell orders across different DEX protocols
@@ -199,6 +269,120 @@ pub struct TradeArbParams {
 }
 
 impl TradingClient {
+    /// Create a TradingClient from shared infrastructure (fast path)
+    ///
+    /// This is the preferred method when multiple wallets share the same infrastructure.
+    /// It only performs wallet-specific initialization (fast_init) without the expensive
+    /// RPC/SWQOS client creation.
+    ///
+    /// # Arguments
+    /// * `payer` - The keypair used for signing transactions
+    /// * `infrastructure` - Shared infrastructure (RPC client, SWQOS clients)
+    /// * `use_seed_optimize` - Whether to use seed optimization for ATA operations
+    ///
+    /// # Returns
+    /// Returns a configured `TradingClient` instance ready for trading operations
+    pub fn from_infrastructure(
+        payer: Arc<Keypair>,
+        infrastructure: Arc<TradingInfrastructure>,
+        use_seed_optimize: bool,
+    ) -> Self {
+        // Initialize wallet-specific caches (fast, synchronous)
+        crate::common::fast_fn::fast_init(&payer.pubkey());
+
+        Self {
+            payer,
+            infrastructure,
+            middleware_manager: None,
+            use_seed_optimize,
+        }
+    }
+
+    /// Create a TradingClient from shared infrastructure with optional WSOL ATA setup
+    ///
+    /// Same as `from_infrastructure` but also handles WSOL ATA creation if requested.
+    ///
+    /// # Arguments
+    /// * `payer` - The keypair used for signing transactions
+    /// * `infrastructure` - Shared infrastructure (RPC client, SWQOS clients)
+    /// * `use_seed_optimize` - Whether to use seed optimization for ATA operations
+    /// * `create_wsol_ata` - Whether to check/create WSOL ATA
+    pub async fn from_infrastructure_with_wsol_setup(
+        payer: Arc<Keypair>,
+        infrastructure: Arc<TradingInfrastructure>,
+        use_seed_optimize: bool,
+        create_wsol_ata: bool,
+    ) -> Self {
+        crate::common::fast_fn::fast_init(&payer.pubkey());
+
+        if create_wsol_ata {
+            Self::ensure_wsol_ata(&payer, &infrastructure.rpc).await;
+        }
+
+        Self {
+            payer,
+            infrastructure,
+            middleware_manager: None,
+            use_seed_optimize,
+        }
+    }
+
+    /// Helper to ensure WSOL ATA exists for a wallet
+    async fn ensure_wsol_ata(payer: &Arc<Keypair>, rpc: &Arc<SolanaRpcClient>) {
+        let wsol_ata =
+            crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
+                &payer.pubkey(),
+                &WSOL_TOKEN_ACCOUNT,
+                &crate::constants::TOKEN_PROGRAM,
+            );
+
+        match rpc.get_account(&wsol_ata).await {
+            Ok(_) => {
+                println!("✅ WSOL ATA已存在: {}", wsol_ata);
+            }
+            Err(_) => {
+                println!("🔨 创建WSOL ATA: {}", wsol_ata);
+                let create_ata_ixs =
+                    crate::trading::common::wsol_manager::create_wsol_ata(&payer.pubkey());
+
+                if !create_ata_ixs.is_empty() {
+                    use solana_sdk::transaction::Transaction;
+                    let recent_blockhash = rpc.get_latest_blockhash().await.unwrap();
+                    let tx = Transaction::new_signed_with_payer(
+                        &create_ata_ixs,
+                        Some(&payer.pubkey()),
+                        &[payer.as_ref()],
+                        recent_blockhash,
+                    );
+
+                    match rpc.send_and_confirm_transaction(&tx).await {
+                        Ok(signature) => {
+                            println!("✅ WSOL ATA创建成功: {}", signature);
+                        }
+                        Err(e) => {
+                            match rpc.get_account(&wsol_ata).await {
+                                Ok(_) => {
+                                    println!(
+                                        "✅ WSOL ATA已存在（交易失败但账户存在）: {}",
+                                        wsol_ata
+                                    );
+                                }
+                                Err(_) => {
+                                    panic!(
+                                        "❌ WSOL ATA创建失败且账户不存在: {}. 错误: {}",
+                                        wsol_ata, e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    println!("ℹ️ WSOL ATA已存在（无需创建）");
+                }
+            }
+        }
+    }
+
     /// Creates a new SolTradingSDK instance with the specified configuration
     ///
     /// This function initializes the trading system with RPC connection, SWQOS settings,
@@ -206,117 +390,27 @@ impl TradingClient {
     ///
     /// # Arguments
     /// * `payer` - The keypair used for signing transactions
-    /// * `rpc_url` - Solana RPC endpoint URL
-    /// * `commitment` - Transaction commitment level for RPC calls
-    /// * `swqos_settings` - List of SWQOS (Solana Web Quality of Service) configurations
+    /// * `trade_config` - Trading configuration including RPC URL, SWQOS settings, etc.
     ///
     /// # Returns
     /// Returns a configured `SolTradingSDK` instance ready for trading operations
     #[inline]
     pub async fn new(payer: Arc<Keypair>, trade_config: TradeConfig) -> Self {
-        crate::common::fast_fn::fast_init(&payer.try_pubkey().unwrap());
+        // Create infrastructure from trade config
+        let infra_config = InfrastructureConfig::from_trade_config(&trade_config);
+        let infrastructure = Arc::new(TradingInfrastructure::new(infra_config).await);
 
-        if CryptoProvider::get_default().is_none() {
-            let _ = default_provider()
-                .install_default()
-                .map_err(|e| anyhow::anyhow!("Failed to install crypto provider: {:?}", e));
-        }
+        // Initialize wallet-specific caches
+        crate::common::fast_fn::fast_init(&payer.pubkey());
 
-        let rpc_url = trade_config.rpc_url.clone();
-        let swqos_configs = trade_config.swqos_configs.clone();
-        let commitment = trade_config.commitment.clone();
-        let mut swqos_clients: Vec<Arc<SwqosClient>> = vec![];
-
-        for swqos in swqos_configs {
-            // Check blacklist, skip disabled providers
-            if swqos.is_blacklisted() {
-                eprintln!("\u{26a0}\u{fe0f} SWQOS {:?} is blacklisted, skipping", swqos.swqos_type());
-                continue;
-            }
-            match SwqosConfig::get_swqos_client(rpc_url.clone(), commitment.clone(), swqos.clone())
-                .await
-            {
-                Ok(swqos_client) => swqos_clients.push(swqos_client),
-                Err(err) => eprintln!(
-                    "failed to create {:?} swqos client: {err}. Excluding from swqos list",
-                    swqos.swqos_type()
-                ),
-            }
-        }
-
-        let rpc =
-            Arc::new(SolanaRpcClient::new_with_commitment(rpc_url.clone(), commitment.clone()));
-        common::seed::update_rents(&rpc).await.unwrap();
-        common::seed::start_rent_updater(rpc.clone());
-
-        // 🔧 初始化WSOL ATA：如果配置为启动时创建，则检查并创建
+        // Handle WSOL ATA creation if configured
         if trade_config.create_wsol_ata_on_startup {
-            // 根据seed配置计算WSOL ATA地址
-            let wsol_ata =
-                crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
-                    &payer.pubkey(),
-                    &WSOL_TOKEN_ACCOUNT,
-                    &crate::constants::TOKEN_PROGRAM,
-                );
-
-            // 查询账户是否存在
-            match rpc.get_account(&wsol_ata).await {
-                Ok(_) => {
-                    // WSOL ATA已存在
-                    println!("✅ WSOL ATA已存在: {}", wsol_ata);
-                }
-                Err(_) => {
-                    // WSOL ATA不存在，创建它
-                    println!("🔨 创建WSOL ATA: {}", wsol_ata);
-                    // 使用seed优化创建WSOL ATA
-                    let create_ata_ixs =
-                        crate::trading::common::wsol_manager::create_wsol_ata(&payer.pubkey());
-
-                    if !create_ata_ixs.is_empty() {
-                        // 构建并发送交易
-                        use solana_sdk::transaction::Transaction;
-                        let recent_blockhash = rpc.get_latest_blockhash().await.unwrap();
-                        let tx = Transaction::new_signed_with_payer(
-                            &create_ata_ixs,
-                            Some(&payer.pubkey()),
-                            &[payer.as_ref()],
-                            recent_blockhash,
-                        );
-
-                        match rpc.send_and_confirm_transaction(&tx).await {
-                            Ok(signature) => {
-                                println!("✅ WSOL ATA创建成功: {}", signature);
-                            }
-                            Err(e) => {
-                                // 创建失败，检查是否是因为已存在
-                                match rpc.get_account(&wsol_ata).await {
-                                    Ok(_) => {
-                                        println!(
-                                            "✅ WSOL ATA已存在（交易失败但账户存在）: {}",
-                                            wsol_ata
-                                        );
-                                    }
-                                    Err(_) => {
-                                        // 账户不存在且创建失败 - 这是严重错误，应该让启动失败
-                                        panic!(
-                                            "❌ WSOL ATA创建失败且账户不存在: {}. 错误: {}",
-                                            wsol_ata, e
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        println!("ℹ️ WSOL ATA已存在（无需创建）");
-                    }
-                }
-            }
+            Self::ensure_wsol_ata(&payer, &infrastructure.rpc).await;
         }
 
         let instance = Self {
             payer,
-            rpc,
-            swqos_clients,
+            infrastructure,
             middleware_manager: None,
             use_seed_optimize: trade_config.use_seed_optimize,
         };
@@ -350,7 +444,7 @@ impl TradingClient {
     /// # Returns
     /// Returns a reference to the Arc-wrapped SolanaRpcClient instance
     pub fn get_rpc(&self) -> &Arc<SolanaRpcClient> {
-        &self.rpc
+        &self.infrastructure.rpc
     }
 
     /// Gets the current globally shared SolanaTrade instance
@@ -422,7 +516,7 @@ impl TradingClient {
         let executor = TradeFactory::create_executor(params.dex_type.clone());
         let protocol_params = params.extension_params;
         let buy_params = SwapParams {
-            rpc: Some(self.rpc.clone()),
+            rpc: Some(self.infrastructure.rpc.clone()),
             payer: self.payer.clone(),
             trade_type: TradeType::Buy,
             input_mint: params.input_mint,
@@ -436,7 +530,7 @@ impl TradingClient {
             wait_transaction_confirmed: params.wait_transaction_confirmed,
             protocol_params: protocol_params.clone(),
             open_seed_optimize: self.use_seed_optimize, // 使用全局seed优化配置
-            swqos_clients: self.swqos_clients.clone(),
+            swqos_clients: self.infrastructure.swqos_clients.clone(),
             middleware_manager: self.middleware_manager.clone(),
             durable_nonce: params.durable_nonce,
             with_tip: true,
@@ -447,6 +541,7 @@ impl TradingClient {
             fixed_output_amount: params.fixed_output_token_amount,
             gas_fee_strategy: params.gas_fee_strategy,
             simulate: params.simulate,
+            use_exact_sol_amount: params.use_exact_sol_amount,
         };
 
         // Validate protocol params
@@ -539,7 +634,7 @@ impl TradingClient {
         let executor = TradeFactory::create_executor(params.dex_type.clone());
         let protocol_params = params.extension_params;
         let sell_params = SwapParams {
-            rpc: Some(self.rpc.clone()),
+            rpc: Some(self.infrastructure.rpc.clone()),
             payer: self.payer.clone(),
             trade_type: TradeType::Sell,
             input_mint: params.input_mint,
@@ -554,7 +649,7 @@ impl TradingClient {
             protocol_params: protocol_params.clone(),
             with_tip: params.with_tip,
             open_seed_optimize: self.use_seed_optimize, // 使用全局seed优化配置
-            swqos_clients: self.swqos_clients.clone(),
+            swqos_clients: self.infrastructure.swqos_clients.clone(),
             middleware_manager: self.middleware_manager.clone(),
             durable_nonce: params.durable_nonce,
             create_input_mint_ata: false,
@@ -564,6 +659,7 @@ impl TradingClient {
             fixed_output_amount: params.fixed_output_token_amount,
             gas_fee_strategy: params.gas_fee_strategy,
             simulate: params.simulate,
+            use_exact_sol_amount: None,
         };
 
         // Validate protocol params
@@ -638,7 +734,7 @@ impl TradingClient {
 
             // Simulate the transaction
             use solana_commitment_config::CommitmentConfig;
-            let simulate_result = self.rpc
+            let simulate_result = self.infrastructure.rpc
                 .simulate_transaction_with_config(
                     &transaction,
                     RpcSimulateTransactionConfig {
@@ -675,7 +771,7 @@ impl TradingClient {
             preflight_commitment: None,
             max_retries: None,
         };
-        let send_result = self.rpc.send_transaction_with_config(&transaction, send_config).await?;
+        let send_result = self.infrastructure.rpc.send_transaction_with_config(&transaction, send_config).await?;
         println!("[Transaction Signature] {}", send_result);
         Ok(signature)
     }
@@ -687,12 +783,12 @@ impl TradingClient {
     ) -> Result<(bool, Vec<Signature>, Option<TradeError>), anyhow::Error> {
         let executor = TradeFactory::create_executor(DexType::Arb);
         let swap_params = ArbSwapParams {
-            rpc: Some(self.rpc.clone()),
+            rpc: Some(self.infrastructure.rpc.clone()),
             payer: self.payer.clone(),
             address_lookup_table_account: params.address_lookup_table_account,
             recent_blockhash: params.recent_blockhash,
             open_seed_optimize: self.use_seed_optimize, // 使用全局seed优化配置
-            swqos_clients: self.swqos_clients.clone(),
+            swqos_clients: self.infrastructure.swqos_clients.clone(),
             middleware_manager: self.middleware_manager.clone(),
             durable_nonce: params.durable_nonce,
             with_tip: params.with_tip,
@@ -770,12 +866,12 @@ impl TradingClient {
     pub async fn wrap_sol_to_wsol(&self, amount: u64) -> Result<String, anyhow::Error> {
         use crate::trading::common::wsol_manager::handle_wsol;
         use solana_sdk::transaction::Transaction;
-        let recent_blockhash = self.rpc.get_latest_blockhash().await?;
+        let recent_blockhash = self.infrastructure.rpc.get_latest_blockhash().await?;
         let instructions = handle_wsol(&self.payer.pubkey(), amount);
         let mut transaction =
             Transaction::new_with_payer(&instructions, Some(&self.payer.pubkey()));
         transaction.sign(&[&*self.payer], recent_blockhash);
-        let signature = self.rpc.send_and_confirm_transaction(&transaction).await?;
+        let signature = self.infrastructure.rpc.send_and_confirm_transaction(&transaction).await?;
         Ok(signature.to_string())
     }
     /// Closes the wSOL associated token account and unwraps remaining balance to native SOL
@@ -798,12 +894,12 @@ impl TradingClient {
     pub async fn close_wsol(&self) -> Result<String, anyhow::Error> {
         use crate::trading::common::wsol_manager::close_wsol;
         use solana_sdk::transaction::Transaction;
-        let recent_blockhash = self.rpc.get_latest_blockhash().await?;
+        let recent_blockhash = self.infrastructure.rpc.get_latest_blockhash().await?;
         let instructions = close_wsol(&self.payer.pubkey());
         let mut transaction =
             Transaction::new_with_payer(&instructions, Some(&self.payer.pubkey()));
         transaction.sign(&[&*self.payer], recent_blockhash);
-        let signature = self.rpc.send_and_confirm_transaction(&transaction).await?;
+        let signature = self.infrastructure.rpc.send_and_confirm_transaction(&transaction).await?;
         Ok(signature.to_string())
     }
 
@@ -828,7 +924,7 @@ impl TradingClient {
         use crate::trading::common::wsol_manager::create_wsol_ata;
         use solana_sdk::transaction::Transaction;
 
-        let recent_blockhash = self.rpc.get_latest_blockhash().await?;
+        let recent_blockhash = self.infrastructure.rpc.get_latest_blockhash().await?;
         let instructions = create_wsol_ata(&self.payer.pubkey());
 
         // If instructions are empty, ATA already exists
@@ -839,7 +935,7 @@ impl TradingClient {
         let mut transaction =
             Transaction::new_with_payer(&instructions, Some(&self.payer.pubkey()));
         transaction.sign(&[&*self.payer], recent_blockhash);
-        let signature = self.rpc.send_and_confirm_transaction(&transaction).await?;
+        let signature = self.infrastructure.rpc.send_and_confirm_transaction(&transaction).await?;
         Ok(signature.to_string())
     }
 
@@ -878,7 +974,7 @@ impl TradingClient {
             &crate::constants::TOKEN_PROGRAM,
         )?;
 
-        let account_exists = self.rpc.get_account(&seed_ata_address).await.is_ok();
+        let account_exists = self.infrastructure.rpc.get_account(&seed_ata_address).await.is_ok();
 
         let instructions = if account_exists {
             // 如果账户已存在，使用不创建账户的版本
@@ -888,10 +984,10 @@ impl TradingClient {
             wrap_wsol_to_sol_internal(&self.payer.pubkey(), amount)?
         };
 
-        let recent_blockhash = self.rpc.get_latest_blockhash().await?;
+        let recent_blockhash = self.infrastructure.rpc.get_latest_blockhash().await?;
         let mut transaction = Transaction::new_with_payer(&instructions, Some(&self.payer.pubkey()));
         transaction.sign(&[&*self.payer], recent_blockhash);
-        let signature = self.rpc.send_and_confirm_transaction(&transaction).await?;
+        let signature = self.infrastructure.rpc.send_and_confirm_transaction(&transaction).await?;
         Ok(signature.to_string())
     }
 }

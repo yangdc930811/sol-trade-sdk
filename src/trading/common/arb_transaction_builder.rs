@@ -23,6 +23,9 @@ pub fn build_transaction(
     business_instructions: Vec<Instruction>,
     address_lookup_table_account: Option<AddressLookupTableAccount>,
     recent_blockhash: Option<Hash>,
+    with_tip: bool,
+    tip_account: &Pubkey,
+    tip_amount: f64,
 ) -> Result<VersionedTransaction, anyhow::Error> {
     let mut instructions = Vec::with_capacity(business_instructions.len() + 5);
 
@@ -34,6 +37,15 @@ pub fn build_transaction(
 
     // Add business instructions
     instructions.extend(business_instructions);
+
+    // Add tip transfer instruction
+    if with_tip && tip_amount > 0.0 {
+        instructions.push(transfer(
+            &payer.pubkey(),
+            tip_account,
+            sol_str_to_lamports(tip_amount.to_string().as_str()).unwrap_or(0),
+        ));
+    }
 
     // Build transaction
     build_versioned_transaction(

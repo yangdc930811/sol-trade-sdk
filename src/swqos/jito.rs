@@ -1,4 +1,3 @@
-
 use crate::swqos::common::{poll_transaction_confirmation, serialize_transaction_and_encode, FormatBase64VersionedTransaction};
 use rand::seq::IndexedRandom;
 use reqwest::Client;
@@ -8,7 +7,7 @@ use std::{sync::Arc, time::Instant};
 use std::time::Duration;
 use solana_transaction_status::UiTransactionEncoding;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use solana_sdk::transaction::VersionedTransaction;
 use crate::swqos::{SwqosType, TradeType};
 use crate::swqos::SwqosClientTrait;
@@ -117,7 +116,7 @@ impl JitoClient {
                 println!(" signature: {:?}", signature);
                 println!(" [jito] {} confirmation failed: {:?}", trade_type, start_time.elapsed());
                 return Err(e);
-            },
+            }
         }
         if wait_confirmation {
             println!(" signature: {:?}", signature);
@@ -162,11 +161,12 @@ impl JitoClient {
         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&response_text) {
             if response_json.get("result").is_some() {
                 println!(" jito {} submitted: {:?}", trade_type, start_time.elapsed());
+                return Ok(());
             } else if let Some(_error) = response_json.get("error") {
                 eprintln!(" jito {} submission failed: {:?}", trade_type, _error);
             }
         }
 
-        Ok(())
+        Err(anyhow!(" jito submission failed: {:?}", trade_type))
     }
 }

@@ -8,6 +8,7 @@ use std::time::Duration;
 use solana_transaction_status::UiTransactionEncoding;
 
 use anyhow::{anyhow, Result};
+use log::info;
 use solana_sdk::transaction::VersionedTransaction;
 use crate::swqos::{SwqosType, TradeType};
 use crate::swqos::SwqosClientTrait;
@@ -160,7 +161,7 @@ impl JitoClient {
 
         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&response_text) {
             if response_json.get("result").is_some() {
-                println!(" jito {} submitted: {:?}", trade_type, start_time.elapsed());
+                info!(" jito submitted: {:?} response_json: {:?}", start_time.elapsed(), response_json);
                 return Ok(());
             } else if let Some(_error) = response_json.get("error") {
                 eprintln!(" jito {} submission failed: {:?}", trade_type, _error);

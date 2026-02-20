@@ -164,7 +164,7 @@ impl JitoClient {
                 info!(" jito submitted: {:?} response_json: {:?}", start_time.elapsed(), response_json);
                 return Ok(());
             } else if let Some(_error) = response_json.get("error") {
-                warn!(" jito submission failed: {:?}", _error);
+                // warn!(" jito submission failed: {:?}", _error);
             }
         }
 

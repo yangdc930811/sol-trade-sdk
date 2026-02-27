@@ -8,8 +8,9 @@ use crate::{
 };
 use crate::{
     instruction::utils::pumpfun::{
-        accounts, get_bonding_curve_pda, get_creator, get_user_volume_accumulator_pda,
-        global_constants::{self}, BUY_DISCRIMINATOR, BUY_EXACT_SOL_IN_DISCRIMINATOR,
+        accounts, get_bonding_curve_pda, get_bonding_curve_v2_pda, get_creator,
+        get_user_volume_accumulator_pda, global_constants::{self}, BUY_DISCRIMINATOR,
+        BUY_EXACT_SOL_IN_DISCRIMINATOR,
     },
     utils::calc::{
         common::{calculate_with_slippage_buy, calculate_with_slippage_sell},
@@ -143,7 +144,8 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
             global_constants::FEE_RECIPIENT_META
         };
 
-        let accounts: [AccountMeta; 16] = [
+        let bonding_curve_v2 = get_bonding_curve_v2_pda(&params.output_mint).unwrap();
+        let mut accounts: Vec<AccountMeta> = vec![
             global_constants::GLOBAL_ACCOUNT_META,
             fee_recipient_meta,
             AccountMeta::new_readonly(params.output_mint, false),
@@ -161,11 +163,12 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
             accounts::FEE_CONFIG_META,
             accounts::FEE_PROGRAM_META,
         ];
+        accounts.push(AccountMeta::new_readonly(bonding_curve_v2, false)); // bonding_curve_v2 (readonly) at end
 
         instructions.push(Instruction::new_with_bytes(
             accounts::PUMPFUN,
             &buy_data,
-            accounts.to_vec(),
+            accounts,
         ));
 
         Ok(instructions)
@@ -263,7 +266,7 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
             global_constants::FEE_RECIPIENT_META
         };
 
-        let accounts: [AccountMeta; 14] = [
+        let mut accounts: Vec<AccountMeta> = vec![
             global_constants::GLOBAL_ACCOUNT_META,
             fee_recipient_meta,
             AccountMeta::new_readonly(params.input_mint, false),
@@ -280,10 +283,20 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
             accounts::FEE_PROGRAM_META,
         ];
 
+        // Cashback: Bonding Curve Sell expects UserVolumeAccumulator PDA at 0th remaining account (writable)
+        if bonding_curve.is_cashback_coin {
+            let user_volume_accumulator =
+                get_user_volume_accumulator_pda(&params.payer.pubkey()).unwrap();
+            accounts.push(AccountMeta::new(user_volume_accumulator, false));
+        }
+        // Program upgrade: bonding_curve_v2 (readonly) at end of account list
+        let bonding_curve_v2 = get_bonding_curve_v2_pda(&params.input_mint).unwrap();
+        accounts.push(AccountMeta::new_readonly(bonding_curve_v2, false));
+
         instructions.push(Instruction::new_with_bytes(
             accounts::PUMPFUN,
             &sell_data,
-            accounts.to_vec(),
+            accounts,
         ));
 
         // Optional: Close token account
@@ -301,4 +314,22 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
 
         Ok(instructions)
     }
+}
+
+/// Claim cashback for Bonding Curve (Pump program). Transfers native lamports from UserVolumeAccumulator to user.
+pub fn claim_cashback_pumpfun_instruction(payer: &Pubkey) -> Option<Instruction> {
+    const CLAIM_CASHBACK_DISCRIMINATOR: [u8; 8] = [37, 58, 35, 126, 190, 53, 228, 197];
+    let user_volume_accumulator = get_user_volume_accumulator_pda(payer)?;
+    let accounts = vec![
+        AccountMeta::new(*payer, true),           // user (signer, writable)
+        AccountMeta::new(user_volume_accumulator, false), // user_volume_accumulator (writable, not signer)
+        crate::constants::SYSTEM_PROGRAM_META,
+        accounts::EVENT_AUTHORITY_META,
+        accounts::PUMPFUN_META,
+    ];
+    Some(Instruction::new_with_bytes(
+        accounts::PUMPFUN,
+        &CLAIM_CASHBACK_DISCRIMINATOR,
+        accounts,
+    ))
 }

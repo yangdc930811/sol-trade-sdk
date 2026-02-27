@@ -74,6 +74,12 @@ pub struct SwapParams {
     pub fixed_output_amount: Option<u64>,
     pub gas_fee_strategy: GasFeeStrategy,
     pub simulate: bool,
+    /// Whether to output SDK logs (from TradeConfig.log_enabled).
+    pub log_enabled: bool,
+    /// Whether to pin parallel submit tasks to cores (from TradeConfig.use_core_affinity).
+    pub use_core_affinity: bool,
+    /// Optional event receive time in microseconds (same scale as sol-parser-sdk clock::now_micros). Used as timing start when log_enabled.
+    pub grpc_recv_us: Option<i64>,
     /// Use exact SOL amount instructions (buy_exact_sol_in for PumpFun, buy_exact_quote_in for PumpSwap).
     /// When Some(true) or None (default), the exact SOL/quote amount is spent and slippage is applied to output tokens.
     /// When Some(false), uses regular buy instruction where slippage is applied to SOL/quote input.
@@ -130,6 +136,8 @@ impl PumpFunParams {
         }
     }
 
+    /// When building from event/parser (e.g. sol-parser-sdk), pass `is_cashback_coin` from the event
+    /// so that sell instructions include the correct remaining accounts for cashback.
     pub fn from_dev_trade(
         mint: Pubkey,
         token_amount: u64,
@@ -141,6 +149,7 @@ impl PumpFunParams {
         close_token_account_when_sell: Option<bool>,
         fee_recipient: Pubkey,
         token_program: Pubkey,
+        is_cashback_coin: bool,
     ) -> Self {
         let is_mayhem_mode = fee_recipient == MAYHEM_FEE_RECIPIENT;
         let bonding_curve_account = BondingCurveAccount::from_dev_trade(
@@ -150,6 +159,7 @@ impl PumpFunParams {
             max_sol_cost,
             creator,
             is_mayhem_mode,
+            is_cashback_coin,
         );
         Self {
             bonding_curve: Arc::new(bonding_curve_account),
@@ -160,6 +170,8 @@ impl PumpFunParams {
         }
     }
 
+    /// When building from event/parser (e.g. sol-parser-sdk), pass `is_cashback_coin` from the event
+    /// so that sell instructions include the correct remaining accounts for cashback.
     pub fn from_trade(
         bonding_curve: Pubkey,
         associated_bonding_curve: Pubkey,
@@ -173,6 +185,7 @@ impl PumpFunParams {
         close_token_account_when_sell: Option<bool>,
         fee_recipient: Pubkey,
         token_program: Pubkey,
+        is_cashback_coin: bool,
     ) -> Self {
         let is_mayhem_mode = fee_recipient == MAYHEM_FEE_RECIPIENT;
         let bonding_curve = BondingCurveAccount::from_trade(
@@ -184,6 +197,7 @@ impl PumpFunParams {
             real_token_reserves,
             real_sol_reserves,
             is_mayhem_mode,
+            is_cashback_coin,
         );
         Self {
             bonding_curve: Arc::new(bonding_curve),
@@ -212,6 +226,7 @@ impl PumpFunParams {
             complete: account.0.complete,
             creator: account.0.creator,
             is_mayhem_mode: account.0.is_mayhem_mode,
+            is_cashback_coin: account.0.is_cashback_coin,
         };
         let associated_bonding_curve = get_associated_token_address_with_program_id(
             &bonding_curve.account,
@@ -262,6 +277,8 @@ pub struct PumpSwapParams {
     pub quote_token_program: Pubkey,
     /// Whether the pool is in mayhem mode
     pub is_mayhem_mode: bool,
+    /// Whether the pool's coin has cashback enabled
+    pub is_cashback_coin: bool,
 }
 
 impl PumpSwapParams {
@@ -289,6 +306,7 @@ impl PumpSwapParams {
             base_token_program,
             quote_token_program,
             is_mayhem_mode,
+            is_cashback_coin: false,
         }
     }
 }

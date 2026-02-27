@@ -1,4 +1,4 @@
-//! 交易序列化模块
+//! Transaction serialization module.
 
 use anyhow::Result;
 use base64::Engine;
@@ -14,7 +14,7 @@ use crate::perf::{
     compiler_optimization::CompileTimeOptimizedEventProcessor,
 };
 
-/// 零分配序列化器 - 使用缓冲池避免运行时分配
+/// Zero-allocation serializer using a buffer pool to avoid runtime allocation.
 pub struct ZeroAllocSerializer {
     buffer_pool: Arc<ArrayQueue<Vec<u8>>>,
     buffer_size: usize,
@@ -24,7 +24,7 @@ impl ZeroAllocSerializer {
     pub fn new(pool_size: usize, buffer_size: usize) -> Self {
         let pool = ArrayQueue::new(pool_size);
 
-        // 预分配缓冲区
+        // Pre-allocate buffers
         for _ in 0..pool_size {
             let mut buffer = Vec::with_capacity(buffer_size);
             buffer.resize(buffer_size, 0);
@@ -38,14 +38,14 @@ impl ZeroAllocSerializer {
     }
 
     pub fn serialize_zero_alloc<T: serde::Serialize>(&self, data: &T, _label: &str) -> Result<Vec<u8>> {
-        // 尝试从池中获取缓冲区
+        // Try to get a buffer from the pool
         let mut buffer = self.buffer_pool.pop().unwrap_or_else(|| {
             let mut buf = Vec::with_capacity(self.buffer_size);
             buf.resize(self.buffer_size, 0);
             buf
         });
 
-        // 序列化到缓冲区
+        // Serialize into buffer
         let serialized = bincode::serialize(data)?;
         buffer.clear();
         buffer.extend_from_slice(&serialized);
@@ -54,11 +54,11 @@ impl ZeroAllocSerializer {
     }
 
     pub fn return_buffer(&self, buffer: Vec<u8>) {
-        // 归还缓冲区到池中
+        // Return buffer to the pool
         let _ = self.buffer_pool.push(buffer);
     }
 
-    /// 获取池统计信息
+    /// Get pool statistics.
     pub fn get_pool_stats(&self) -> (usize, usize) {
         let available = self.buffer_pool.len();
         let capacity = self.buffer_pool.capacity();
@@ -66,32 +66,32 @@ impl ZeroAllocSerializer {
     }
 }
 
-/// 全局序列化器实例
+/// Global serializer instance.
 static SERIALIZER: Lazy<Arc<ZeroAllocSerializer>> = Lazy::new(|| {
     Arc::new(ZeroAllocSerializer::new(
-        10_000,      // 池大小
-        256 * 1024,  // 缓冲区大小: 256KB
+        10_000,      // Pool size
+        256 * 1024,  // Buffer size: 256KB
     ))
 });
 
-/// 🚀 编译时优化的事件处理器 (零运行时开销)
+/// Compile-time optimized event processor (zero runtime cost).
 static COMPILE_TIME_PROCESSOR: CompileTimeOptimizedEventProcessor =
     CompileTimeOptimizedEventProcessor::new();
 
-/// Base64 编码器
+/// Base64 encoder.
 pub struct Base64Encoder;
 
 impl Base64Encoder {
     #[inline(always)]
     pub fn encode(data: &[u8]) -> String {
-        // 使用编译时优化的哈希进行快速路由
+        // Use compile-time optimized hash for fast routing
         let _route = if !data.is_empty() {
             COMPILE_TIME_PROCESSOR.route_event_zero_cost(data[0])
         } else {
             0
         };
 
-        // 使用 SIMD 加速的 Base64 编码
+        // Use SIMD-accelerated Base64 encoding
         SIMDSerializer::encode_base64_simd(data)
     }
 
@@ -105,32 +105,98 @@ impl Base64Encoder {
     }
 }
 
-/// 交易序列化
+/// Guard that returns the serialization buffer to the pool on drop.
+pub struct PooledTxBufGuard(pub Vec<u8>);
+
+impl std::ops::Deref for PooledTxBufGuard {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Drop for PooledTxBufGuard {
+    fn drop(&mut self) {
+        if !self.0.is_empty() {
+            SERIALIZER.return_buffer(std::mem::take(&mut self.0));
+        }
+    }
+}
+
+/// Serialize transaction to bincode bytes using buffer pool. The returned guard returns the buffer
+/// to the pool when dropped; use `&*guard` or `guard.as_ref()` for `&[u8]`.
+pub fn serialize_transaction_bincode_sync(
+    transaction: &impl SerializableTransaction,
+) -> Result<(PooledTxBufGuard, Signature)> {
+    let signature = transaction.get_signature();
+    let serialized_tx = SERIALIZER.serialize_zero_alloc(transaction, "transaction")?;
+    Ok((PooledTxBufGuard(serialized_tx), *signature))
+}
+
+/// Return a buffer to the pool (for manual use when not using `PooledTxBufGuard`).
+pub fn return_serialization_buffer(buffer: Vec<u8>) {
+    SERIALIZER.return_buffer(buffer);
+}
+
+/// Sync serialize + encode using buffer pool; use in hot path to reduce allocs.
+/// Base64 path uses SIMD-accelerated encoding.
+pub fn serialize_transaction_sync(
+    transaction: &impl SerializableTransaction,
+    encoding: UiTransactionEncoding,
+) -> Result<(String, Signature)> {
+    let signature = transaction.get_signature();
+    let serialized_tx = SERIALIZER.serialize_zero_alloc(transaction, "transaction")?;
+    let serialized = match encoding {
+        UiTransactionEncoding::Base58 => bs58::encode(&serialized_tx).into_string(),
+        UiTransactionEncoding::Base64 => SIMDSerializer::encode_base64_simd(&serialized_tx),
+        _ => return Err(anyhow::anyhow!("Unsupported encoding")),
+    };
+    SERIALIZER.return_buffer(serialized_tx);
+    Ok((serialized, *signature))
+}
+
+/// Serialize a transaction (async; no I/O, kept for API compatibility).
 pub async fn serialize_transaction(
     transaction: &impl SerializableTransaction,
     encoding: UiTransactionEncoding,
 ) -> Result<(String, Signature)> {
     let signature = transaction.get_signature();
 
-    // 使用零分配序列化
+    // Use zero-allocation serialization
     let serialized_tx = SERIALIZER.serialize_zero_alloc(transaction, "transaction")?;
 
     let serialized = match encoding {
         UiTransactionEncoding::Base58 => bs58::encode(&serialized_tx).into_string(),
-        UiTransactionEncoding::Base64 => {
-            // 使用 SIMD 优化的 Base64 编码
-            STANDARD.encode(&serialized_tx)
-        }
+        UiTransactionEncoding::Base64 => SIMDSerializer::encode_base64_simd(&serialized_tx),
         _ => return Err(anyhow::anyhow!("Unsupported encoding")),
     };
 
-    // 立即归还缓冲区到池中
+    // Return buffer to pool immediately
     SERIALIZER.return_buffer(serialized_tx);
 
     Ok((serialized, *signature))
 }
 
-/// 批量交易序列化
+/// Sync batch serialize + encode using buffer pool.
+pub fn serialize_transactions_batch_sync(
+    transactions: &[impl SerializableTransaction],
+    encoding: UiTransactionEncoding,
+) -> Result<Vec<String>> {
+    let mut results = Vec::with_capacity(transactions.len());
+    for tx in transactions {
+        let serialized_tx = SERIALIZER.serialize_zero_alloc(tx, "transaction")?;
+        let encoded = match encoding {
+            UiTransactionEncoding::Base58 => bs58::encode(&serialized_tx).into_string(),
+            UiTransactionEncoding::Base64 => SIMDSerializer::encode_base64_simd(&serialized_tx),
+            _ => return Err(anyhow::anyhow!("Unsupported encoding")),
+        };
+        SERIALIZER.return_buffer(serialized_tx);
+        results.push(encoded);
+    }
+    Ok(results)
+}
+
+/// Batch transaction serialization.
 pub async fn serialize_transactions_batch(
     transactions: &[impl SerializableTransaction],
     encoding: UiTransactionEncoding,
@@ -142,7 +208,7 @@ pub async fn serialize_transactions_batch(
 
         let encoded = match encoding {
             UiTransactionEncoding::Base58 => bs58::encode(&serialized_tx).into_string(),
-            UiTransactionEncoding::Base64 => STANDARD.encode(&serialized_tx),
+            UiTransactionEncoding::Base64 => SIMDSerializer::encode_base64_simd(&serialized_tx),
             _ => return Err(anyhow::anyhow!("Unsupported encoding")),
         };
 
@@ -153,7 +219,7 @@ pub async fn serialize_transactions_batch(
     Ok(results)
 }
 
-/// 获取序列化器统计信息
+/// Get serializer statistics.
 pub fn get_serializer_stats() -> (usize, usize) {
     SERIALIZER.get_pool_stats()
 }
@@ -168,7 +234,7 @@ mod tests {
         let encoded = Base64Encoder::encode(data);
         assert!(!encoded.is_empty());
 
-        // 验证可以正确解码
+        // Verify it decodes correctly
         let decoded = STANDARD.decode(&encoded).unwrap();
         assert_eq!(&decoded[..data.len()], data);
     }

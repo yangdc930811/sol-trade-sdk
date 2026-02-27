@@ -112,7 +112,7 @@ pub fn _create_associated_token_account_idempotent_fast(
         && !mint.eq(&crate::constants::WSOL_TOKEN_ACCOUNT)
         && !mint.eq(&crate::constants::SOL_TOKEN_ACCOUNT)
         && (token_program.eq(&crate::constants::TOKEN_PROGRAM)
-            || token_program.eq(&crate::constants::TOKEN_PROGRAM_2022))
+        || token_program.eq(&crate::constants::TOKEN_PROGRAM_2022))
     {
         // Use cache to get instruction
         get_cached_instructions(cache_key, || {
@@ -141,7 +141,7 @@ pub fn _create_associated_token_account_idempotent_fast(
             }]
         })
     };
-    
+
     // 🚀 性能优化：尝试零开销解包 Arc，如果引用计数=1则直接移出，否则克隆
     Arc::try_unwrap(arc_instructions).unwrap_or_else(|arc| (*arc).clone())
 }
@@ -153,6 +153,7 @@ pub fn _create_associated_token_account_idempotent_fast(
 pub enum PdaCacheKey {
     PumpFunUserVolume(Pubkey),
     PumpFunBondingCurve(Pubkey),
+    PumpFunBondingCurveV2(Pubkey),
     PumpFunCreatorVault(Pubkey),
     BonkPool(Pubkey, Pubkey),
     BonkVault(Pubkey, Pubkey),
@@ -165,6 +166,7 @@ pub enum PdaCacheKey {
     RaydiumClmmTickArrayBitmapExtension(Pubkey),
     RaydiumClmmTickArray(Pubkey, i32),  // 获取交易时需要的额外key
     MeteoraDlmmBinArray(Pubkey, i64),  // 获取交易时需要的额外key
+    PumpSwapPoolV2(Pubkey),
 }
 
 /// Global lock-free PDA cache for storing computation results
@@ -262,14 +264,14 @@ fn _get_associated_token_address_with_program_id_fast(
         && !token_mint_address.eq(&crate::constants::WSOL_TOKEN_ACCOUNT)
         && !token_mint_address.eq(&crate::constants::SOL_TOKEN_ACCOUNT)
         && (token_program_id.eq(&crate::constants::TOKEN_PROGRAM)
-            || token_program_id.eq(&crate::constants::TOKEN_PROGRAM_2022))
+        || token_program_id.eq(&crate::constants::TOKEN_PROGRAM_2022))
     {
         super::seed::get_associated_token_address_with_program_id_use_seed(
             wallet_address,
             token_mint_address,
             token_program_id,
         )
-        .unwrap()
+            .unwrap()
     } else {
         get_associated_token_address_with_program_id(
             wallet_address,
@@ -311,7 +313,7 @@ pub fn fast_init(payer: &Pubkey) {
                 &payer,
                 &[],
             )
-            .unwrap()]
+                .unwrap()]
         },
     );
 }

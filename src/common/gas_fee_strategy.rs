@@ -300,7 +300,7 @@ impl GasFeeStrategy {
     pub fn update_buy_tip(&self, buy_tip: f64) {
         self.strategies.rcu(|current_map| {
             let mut new_map = (**current_map).clone();
-            for ((swqos_type, trade_type, strategy_type), value) in new_map.iter_mut() {
+            for ((_swqos_type, trade_type, _strategy_type), value) in new_map.iter_mut() {
                 if *trade_type == TradeType::Buy {
                     value.tip = buy_tip;
                 }
@@ -327,7 +327,7 @@ impl GasFeeStrategy {
     pub fn update_sell_tip(&self, sell_tip: f64) {
         self.strategies.rcu(|current_map| {
             let mut new_map = (**current_map).clone();
-            for ((swqos_type, trade_type, strategy_type), value) in new_map.iter_mut() {
+            for ((_swqos_type, trade_type, _strategy_type), value) in new_map.iter_mut() {
                 if *trade_type == TradeType::Sell {
                     value.tip = sell_tip;
                 }
@@ -341,7 +341,7 @@ impl GasFeeStrategy {
     pub fn update_buy_cu_price(&self, buy_cu_price: u64) {
         self.strategies.rcu(|current_map| {
             let mut new_map = (**current_map).clone();
-            for ((swqos_type, trade_type, strategy_type), value) in new_map.iter_mut() {
+            for ((_swqos_type, trade_type, _strategy_type), value) in new_map.iter_mut() {
                 if *trade_type == TradeType::Buy {
                     value.cu_price = buy_cu_price;
                 }
@@ -355,7 +355,7 @@ impl GasFeeStrategy {
     pub fn update_sell_cu_price(&self, sell_cu_price: u64) {
         self.strategies.rcu(|current_map| {
             let mut new_map = (**current_map).clone();
-            for ((swqos_type, trade_type, strategy_type), value) in new_map.iter_mut() {
+            for ((_swqos_type, trade_type, _strategy_type), value) in new_map.iter_mut() {
                 if *trade_type == TradeType::Sell {
                     value.cu_price = sell_cu_price;
                 }
@@ -367,6 +367,9 @@ impl GasFeeStrategy {
     /// 打印所有策略。
     /// Print all strategies
     pub fn print_all_strategies(&self) {
+        if !crate::common::sdk_log::sdk_log_enabled() {
+            return;
+        }
         for strategy in self.get_strategies(TradeType::Buy) {
             println!("[buy] - {:?}", strategy);
         }

@@ -11,17 +11,16 @@ use super::{
 };
 use crate::{
     common::{nonce_cache::DurableNonceInfo, SolanaRpcClient},
-    constants::swqos::NODE1_TIP_ACCOUNTS,
     trading::{MiddlewareManager, core::transaction_pool::{acquire_builder, release_builder}},
 };
 
 /// Build standard RPC transaction
 pub fn build_transaction(
     payer: Arc<Keypair>,
-    rpc: Option<Arc<SolanaRpcClient>>,
+    _rpc: Option<Arc<SolanaRpcClient>>,
     unit_limit: u32,
     unit_price: u64,
-    business_instructions: Vec<Instruction>,
+    business_instructions: &[Instruction],
     address_lookup_table_account: Option<AddressLookupTableAccount>,
     recent_blockhash: Option<Hash>,
     middleware_manager: Option<Arc<MiddlewareManager>>,
@@ -47,8 +46,8 @@ pub fn build_transaction(
         unit_limit,
     ));
 
-    // Add business instructions
-    instructions.extend(business_instructions);
+    // Add business instructions (clone only here; avoids per-task Vec clone in execute_parallel)
+    instructions.extend_from_slice(business_instructions);
 
     // Add tip transfer instruction
     if with_tip && tip_amount > 0.0 {

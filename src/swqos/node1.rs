@@ -1,4 +1,4 @@
-use crate::swqos::common::{poll_transaction_confirmation, serialize_transaction_and_encode};
+use crate::swqos::common::{default_http_client_builder, poll_transaction_confirmation, serialize_transaction_and_encode};
 use rand::seq::IndexedRandom;
 use reqwest::Client;
 use serde_json::json;
@@ -50,19 +50,7 @@ impl SwqosClientTrait for Node1Client {
 impl Node1Client {
     pub fn new(rpc_url: String, endpoint: String, auth_token: String) -> Self {
         let rpc_client = SolanaRpcClient::new(rpc_url);
-        let http_client = Client::builder()
-            // Optimized connection pool settings for high performance
-            .pool_idle_timeout(Duration::from_secs(120))
-            .pool_max_idle_per_host(256)  // Increased from 64 to 256
-            .tcp_keepalive(Some(Duration::from_secs(60)))  // Reduced from 1200 to 60
-            .tcp_nodelay(true)  // Disable Nagle's algorithm for lower latency
-            .http2_keep_alive_interval(Duration::from_secs(10))
-            .http2_keep_alive_timeout(Duration::from_secs(5))
-            .http2_adaptive_window(true)  // Enable adaptive flow control
-            .timeout(Duration::from_millis(3000))  // Reduced from 10s to 3s
-            .connect_timeout(Duration::from_millis(2000))  // Reduced from 5s to 2s
-            .build()
-            .unwrap();
+        let http_client = default_http_client_builder().build().unwrap();
         
         let client = Self { 
             rpc_client: Arc::new(rpc_client), 
@@ -90,18 +78,22 @@ impl Node1Client {
         let stop_ping = self.stop_ping.clone();
         
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60)); // Ping every 60 seconds
-            
+            // Immediate first ping to warm connection and reduce first-submit cold start latency
+            if let Err(e) = Self::send_ping_request(&http_client, &endpoint, &auth_token).await {
+                if crate::common::sdk_log::sdk_log_enabled() {
+                    eprintln!("Node1 ping request failed: {}", e);
+                }
+            }
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
-                
                 if stop_ping.load(Ordering::Relaxed) {
                     break;
                 }
-                
-                // Send ping request
                 if let Err(e) = Self::send_ping_request(&http_client, &endpoint, &auth_token).await {
-                    eprintln!("Node1 ping request failed: {}", e);
+                    if crate::common::sdk_log::sdk_log_enabled() {
+                        eprintln!("Node1 ping request failed: {}", e);
+                    }
                 }
             }
         });
@@ -125,24 +117,22 @@ impl Node1Client {
             format!("{}/ping", endpoint)
         };
 
-        // Send GET request to /ping endpoint (no api-key required)
+        // Short timeout for ping; consume body so connection is returned to pool for reuse by submit
         let response = http_client.get(&ping_url)
+            .timeout(Duration::from_millis(1500))
             .send()
             .await?;
-        
-        if response.status().is_success() {
-            // ping successful, connection remains active
-            // Can optionally log, but to reduce noise, not printing here
-        } else {
-            eprintln!("Node1 ping request returned non-success status: {}", response.status());
+        let status = response.status();
+        let _ = response.bytes().await;
+        if !status.is_success() && crate::common::sdk_log::sdk_log_enabled() {
+            eprintln!("Node1 ping request returned non-success status: {}", status);
         }
-        
         Ok(())
     }
 
     pub async fn send_transaction(&self, trade_type: TradeType, transaction: &VersionedTransaction, wait_confirmation: bool) -> Result<()> {
         let start_time = Instant::now();
-        let (content, signature) = serialize_transaction_and_encode(transaction, UiTransactionEncoding::Base64).await?;
+        let (content, signature) = serialize_transaction_and_encode(transaction, UiTransactionEncoding::Base64)?;
 
         let request_body = serde_json::to_string(&json!({
             "jsonrpc": "2.0",
@@ -166,12 +156,14 @@ impl Node1Client {
 
         // Parse JSON response
         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&response_text) {
-            if response_json.get("result").is_some() {
-                println!(" [node1] {} submitted: {:?}", trade_type, start_time.elapsed());
-            } else if let Some(_error) = response_json.get("error") {
-                eprintln!(" [node1] {} submission failed: {:?}", trade_type, _error);
+            if crate::common::sdk_log::sdk_log_enabled() {
+                if response_json.get("result").is_some() {
+                    println!(" [node1] {} submitted: {:?}", trade_type, start_time.elapsed());
+                } else if let Some(_error) = response_json.get("error") {
+                    eprintln!(" [node1] {} submission failed: {:?}", trade_type, _error);
+                }
             }
-        } else {
+        } else if crate::common::sdk_log::sdk_log_enabled() {
             eprintln!(" [node1] {} submission failed: {:?}", trade_type, response_text);
         }
 
@@ -179,12 +171,14 @@ impl Node1Client {
         match poll_transaction_confirmation(&self.rpc_client, signature, wait_confirmation).await {
             Ok(_) => (),
             Err(e) => {
-                println!(" signature: {:?}", signature);
-                println!(" [node1] {} confirmation failed: {:?}", trade_type, start_time.elapsed());
+                if crate::common::sdk_log::sdk_log_enabled() {
+                    println!(" signature: {:?}", signature);
+                    println!(" [node1] {} confirmation failed: {:?}", trade_type, start_time.elapsed());
+                }
                 return Err(e);
             },
         }
-        if wait_confirmation {
+        if wait_confirmation && crate::common::sdk_log::sdk_log_enabled() {
             println!(" signature: {:?}", signature);
             println!(" [node1] {} confirmed: {:?}", trade_type, start_time.elapsed());
         }

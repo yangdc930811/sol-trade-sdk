@@ -47,10 +47,11 @@
   - [📋 使用示例](#-使用示例)
   - [⚡ 交易参数](#-交易参数)
   - [📊 使用示例汇总表格](#-使用示例汇总表格)
-  - [⚙️ SWQOS 服务配置说明](#️-swqos-服务配置说明)
+  - [⚙️ SWQoS 服务配置说明](#️-swqos-服务配置说明)
   - [🔧 中间件系统说明](#-中间件系统说明)
   - [🔍 地址查找表](#-地址查找表)
   - [🔍 Nonce 缓存](#-nonce-缓存)
+- [💰 Cashback 支持（PumpFun / PumpSwap）](#-cashback-支持pumpfun--pumpswap)
 - [🛡️ MEV 保护服务](#️-mev-保护服务)
 - [📁 项目结构](#-项目结构)
 - [📄 许可证](#-许可证)
@@ -71,6 +72,7 @@
 8. **并发交易**: 同时使用多个 MEV 服务发送交易，最快的成功，其他失败
 9. **统一交易接口**: 使用统一的交易协议枚举进行交易操作
 10. **中间件系统**: 支持自定义指令中间件，可在交易执行前对指令进行修改、添加或移除
+11. **共享基础设施**: 多钱包可共享同一套 RPC 与 SWQoS 客户端，降低资源占用
 
 ## 📦 安装
 
@@ -87,14 +89,14 @@ git clone https://github.com/0xfnzero/sol-trade-sdk
 
 ```toml
 # 添加到您的 Cargo.toml
-sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.4.0" }
+sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.5.4" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-sol-trade-sdk = "3.4.0"
+sol-trade-sdk = "3.5.4"
 ```
 
 ## 🛠️ 使用示例
@@ -103,38 +105,44 @@ sol-trade-sdk = "3.4.0"
 
 #### 1. 创建 TradingClient 实例
 
-可以参考 [示例：创建 TradingClient 实例](examples/trading_client/src/main.rs)。
+可参考 [示例：创建 TradingClient 实例](examples/trading_client/src/main.rs)。
 
+**方式一：简单创建（单钱包）**
 ```rust
 // 钱包
 let payer = Keypair::from_base58_string("use_your_payer_keypair_here");
 // RPC 地址
 let rpc_url = "https://mainnet.helius-rpc.com/?api-key=xxxxxx".to_string();
 let commitment = CommitmentConfig::processed();
-// 可以配置多个SWQOS服务
+// 可配置多个 SWQoS 服务
 let swqos_configs: Vec<SwqosConfig> = vec![
     SwqosConfig::Default(rpc_url.clone()),
     SwqosConfig::Jito("your uuid".to_string(), SwqosRegion::Frankfurt, None),
     SwqosConfig::Bloxroute("your api_token".to_string(), SwqosRegion::Frankfurt, None),
-    SwqosConfig::ZeroSlot("your api_token".to_string(), SwqosRegion::Frankfurt, None),
-    SwqosConfig::Temporal("your api_token".to_string(), SwqosRegion::Frankfurt, None),
-    SwqosConfig::FlashBlock("your api_token".to_string(), SwqosRegion::Frankfurt, None),
-    SwqosConfig::Node1("your api_token".to_string(), SwqosRegion::Frankfurt, None),
-    SwqosConfig::BlockRazor("your api_token".to_string(), SwqosRegion::Frankfurt, None),
-    SwqosConfig::Astralane("your api_token".to_string(), SwqosRegion::Frankfurt, None),
 ];
 // 创建 TradeConfig 实例
 let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment);
 
-// 可选：自定义 WSOL ATA 和 Seed 优化设置
+// 可选：自定义 WSOL ATA 与 Seed 优化
 // let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment)
-//     .with_wsol_ata_config(
-//         true,  // create_wsol_ata_on_startup: 启动时检查并创建 WSOL ATA（默认: true）
-//         true   // use_seed_optimize: 全局启用所有 ATA 操作的 seed 优化（默认: true）
-//     );
+//     .with_wsol_ata_config(true, true);  // create_wsol_ata_on_startup, use_seed_optimize
 
-// 创建 TradingClient 客户端
+// 创建 TradingClient
 let client = TradingClient::new(Arc::new(payer), trade_config).await;
+```
+
+**方式二：共享基础设施（多钱包）**
+
+多钱包场景下可先创建一份基础设施，再复用到多个钱包。参见 [示例：共享基础设施](examples/shared_infrastructure/src/main.rs)。
+
+```rust
+// 创建一次基础设施（开销较大）
+let infra_config = InfrastructureConfig::new(rpc_url, swqos_configs, commitment);
+let infrastructure = Arc::new(TradingInfrastructure::new(infra_config).await);
+
+// 基于同一基础设施创建多个客户端（开销小）
+let client1 = TradingClient::from_infrastructure(Arc::new(payer1), infrastructure.clone(), true);
+let client2 = TradingClient::from_infrastructure(Arc::new(payer2), infrastructure.clone(), true);
 ```
 
 #### 2. 配置 Gas Fee 策略
@@ -198,6 +206,7 @@ client.buy(buy_params).await?;
 | 描述 | 运行命令 | 源码路径 |
 |------|---------|----------|
 | 创建和配置 TradingClient 实例 | `cargo run --package trading_client` | [examples/trading_client](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/trading_client/src/main.rs) |
+| 多钱包共享基础设施 | `cargo run --package shared_infrastructure` | [examples/shared_infrastructure](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/shared_infrastructure/src/main.rs) |
 | PumpFun 代币狙击交易 | `cargo run --package pumpfun_sniper_trading` | [examples/pumpfun_sniper_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpfun_sniper_trading/src/main.rs) |
 | PumpFun 代币跟单交易 | `cargo run --package pumpfun_copy_trading` | [examples/pumpfun_copy_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpfun_copy_trading/src/main.rs) |
 | PumpSwap 交易操作 | `cargo run --package pumpswap_trading` | [examples/pumpswap_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/pumpswap_trading/src/main.rs) |
@@ -213,16 +222,16 @@ client.buy(buy_params).await?;
 | Seed 优化交易示例 | `cargo run --package seed_trading` | [examples/seed_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/seed_trading/src/main.rs) |
 | Gas费用策略示例 | `cargo run --package gas_fee_strategy` | [examples/gas_fee_strategy](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/gas_fee_strategy/src/main.rs) |
 
-### ⚙️ SWQOS 服务配置说明
+### ⚙️ SWQoS 服务配置说明
 
-在配置 SWQOS 服务时，需要注意不同服务的参数要求：
+在配置 SWQoS 服务时，需要注意不同服务的参数要求：
 
 - **Jito**: 第一个参数为 UUID（如无 UUID 请传入空字符串 `""`）
 - 其他的MEV服务，第一个参数为 API Token
 
 #### 自定义 URL 支持
 
-每个 SWQOS 服务现在都支持可选的自定义 URL 参数：
+每个 SWQoS 服务现在都支持可选的自定义 URL 参数：
 
 ```rust
 // 使用自定义 URL（第三个参数）
@@ -267,6 +276,17 @@ let middleware_manager = MiddlewareManager::new()
 ### 🔍 Durable Nonce
 
 使用 Durable Nonce 来实现交易重放保护和优化交易处理。详细信息请参阅 [Nonce 使用指南](docs/NONCE_CACHE_CN.md)。
+
+## 💰 Cashback 支持（PumpFun / PumpSwap）
+
+PumpFun 与 PumpSwap 支持**返现（Cashback）**：部分手续费可返还给用户。SDK **必须知道**该代币是否开启返现，才能为 buy/sell 指令传入正确的账户（例如返现代币需要把 `UserVolumeAccumulator` 作为 remaining account）。
+
+- **参数来自 RPC 时**：使用 `PumpFunParams::from_mint_by_rpc` 或 `PumpSwapParams::from_pool_address_by_rpc` / `from_mint_by_rpc` 时，SDK 会从链上读取 `is_cashback_coin`，无需额外传入。
+- **参数来自事件/解析器时**：若根据交易事件（如 [sol-parser-sdk](https://github.com/0xfnzero/sol-parser-sdk)）构建参数，**必须**把返现标志传给 SDK：
+  - **PumpFun**：`PumpFunParams::from_trade(..., is_cashback_coin)` 与 `PumpFunParams::from_dev_trade(..., is_cashback_coin)` 最后一个参数为 `is_cashback_coin`。从解析出的事件传入（如 sol-parser-sdk 的 `PumpFunTradeEvent.is_cashback_coin`）。
+  - **PumpSwap**：`PumpSwapParams` 有字段 `is_cashback_coin`。手动构造参数（如从池/交易事件）时，从解析到的池或事件数据中设置该字段。
+- **pumpfun_copy_trading**、**pumpfun_sniper_trading** 示例使用 sol-parser-sdk 订阅 gRPC 事件，并在构造参数时传入 `e.is_cashback_coin`。
+- **领取返现**：使用 `client.claim_cashback_pumpfun()` 和 `client.claim_cashback_pumpswap(...)` 领取累计的返现。
 
 ## 🛡️ MEV 保护服务
 

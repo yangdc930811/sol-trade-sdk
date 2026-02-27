@@ -47,10 +47,11 @@
   - [📋 Example Usage](#-example-usage)
   - [⚡ Trading Parameters](#-trading-parameters)
   - [📊 Usage Examples Summary Table](#-usage-examples-summary-table)
-  - [⚙️ SWQOS Service Configuration](#️-swqos-service-configuration)
+  - [⚙️ SWQoS Service Configuration](#️-swqos-service-configuration)
   - [🔧 Middleware System](#-middleware-system)
   - [🔍 Address Lookup Tables](#-address-lookup-tables)
   - [🔍 Nonce Cache](#-nonce-cache)
+- [💰 Cashback Support (PumpFun / PumpSwap)](#-cashback-support-pumpfun--pumpswap)
 - [🛡️ MEV Protection Services](#️-mev-protection-services)
 - [📁 Project Structure](#-project-structure)
 - [📄 License](#-license)
@@ -71,7 +72,7 @@
 8. **Concurrent Trading**: Send transactions using multiple MEV services simultaneously; the fastest succeeds while others fail
 9. **Unified Trading Interface**: Use unified trading protocol enums for trading operations
 10. **Middleware System**: Support for custom instruction middleware to modify, add, or remove instructions before transaction execution
-11. **Shared Infrastructure**: Share expensive RPC and SWQOS clients across multiple wallets for reduced resource usage
+11. **Shared Infrastructure**: Share expensive RPC and SWQoS clients across multiple wallets for reduced resource usage
 
 ## 📦 Installation
 
@@ -88,14 +89,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.4.0" }
+sol-trade-sdk = { path = "./sol-trade-sdk", version = "3.5.4" }
 ```
 
 ### Use crates.io
 
 ```toml
 # Add to your Cargo.toml
-sol-trade-sdk = "3.4.0"
+sol-trade-sdk = "3.5.4"
 ```
 
 ## 🛠️ Usage Examples
@@ -113,7 +114,7 @@ let payer = Keypair::from_base58_string("use_your_payer_keypair_here");
 // RPC URL
 let rpc_url = "https://mainnet.helius-rpc.com/?api-key=xxxxxx".to_string();
 let commitment = CommitmentConfig::processed();
-// Multiple SWQOS services can be configured
+// Multiple SWQoS services can be configured
 let swqos_configs: Vec<SwqosConfig> = vec![
     SwqosConfig::Default(rpc_url.clone()),
     SwqosConfig::Jito("your uuid".to_string(), SwqosRegion::Frankfurt, None),
@@ -121,6 +122,10 @@ let swqos_configs: Vec<SwqosConfig> = vec![
 ];
 // Create TradeConfig instance
 let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment);
+
+// Optional: customize WSOL ATA and seed optimization
+// let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment)
+//     .with_wsol_ata_config(true, true);  // create_wsol_ata_on_startup, use_seed_optimize
 
 // Create TradingClient
 let client = TradingClient::new(Arc::new(payer), trade_config).await;
@@ -218,16 +223,16 @@ Please ensure that the parameters your trading logic depends on are available in
 | Seed trading example | `cargo run --package seed_trading` | [examples/seed_trading](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/seed_trading/src/main.rs) |
 | Gas fee strategy example | `cargo run --package gas_fee_strategy` | [examples/gas_fee_strategy](https://github.com/0xfnzero/sol-trade-sdk/tree/main/examples/gas_fee_strategy/src/main.rs) |
 
-### ⚙️ SWQOS Service Configuration
+### ⚙️ SWQoS Service Configuration
 
-When configuring SWQOS services, note the different parameter requirements for each service:
+When configuring SWQoS services, note the different parameter requirements for each service:
 
 - **Jito**: The first parameter is UUID (if no UUID, pass an empty string `""`)
 - **Other MEV services**: The first parameter is the API Token
 
 #### Custom URL Support
 
-Each SWQOS service now supports an optional custom URL parameter:
+Each SWQoS service now supports an optional custom URL parameter:
 
 ```rust
 // Using custom URL (third parameter)
@@ -272,6 +277,17 @@ Address Lookup Tables (ALT) allow you to optimize transaction size and reduce fe
 ### 🔍 Durable Nonce
 
 Use Durable Nonce to implement transaction replay protection and optimize transaction processing. For detailed information, see the [Durable Nonce Guide](docs/NONCE_CACHE.md).
+
+## 💰 Cashback Support (PumpFun / PumpSwap)
+
+PumpFun and PumpSwap support **cashback** for eligible tokens: part of the trading fee can be returned to the user. The SDK **must know** whether the token has cashback enabled so that buy/sell instructions include the correct accounts (e.g. `UserVolumeAccumulator` as remaining account for cashback coins).
+
+- **When params come from RPC**: If you use `PumpFunParams::from_mint_by_rpc` or `PumpSwapParams::from_pool_address_by_rpc` / `from_mint_by_rpc`, the SDK reads `is_cashback_coin` from chain—no extra step.
+- **When params come from event/parser**: If you build params from trade events (e.g. [sol-parser-sdk](https://github.com/0xfnzero/sol-parser-sdk)), you **must** pass the cashback flag into the SDK:
+  - **PumpFun**: `PumpFunParams::from_trade(..., is_cashback_coin)` and `PumpFunParams::from_dev_trade(..., is_cashback_coin)` take an `is_cashback_coin` parameter. Set it from the parsed event (e.g. CreateEvent’s `is_cashback_enabled` or BondingCurve’s `is_cashback_coin`).
+  - **PumpSwap**: `PumpSwapParams` has a field `is_cashback_coin`. When constructing params manually (e.g. from pool/trade events), set it from the parsed pool or event data.
+- The **pumpfun_copy_trading** and **pumpfun_sniper_trading** examples use sol-parser-sdk for gRPC subscription and pass `e.is_cashback_coin` when building params.
+- **Claim**: Use `client.claim_cashback_pumpfun()` and `client.claim_cashback_pumpswap(...)` to claim accumulated cashback.
 
 ## 🛡️ MEV Protection Services
 

@@ -3,6 +3,7 @@ use anyhow::Result;
 use base64::engine::general_purpose::{self, STANDARD};
 use base64::Engine;
 use bincode::serialize;
+use crate::swqos::serialization;
 use reqwest::Client;
 use serde_json;
 use serde_json::json;
@@ -16,6 +17,36 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
+/// Default pool idle timeout for SWQOS HTTP client (seconds). 连接池空闲超时（秒）。
+const HTTP_POOL_IDLE_TIMEOUT_SECS: u64 = 300;
+/// Max idle connections per host. 每主机最大空闲连接数。
+const HTTP_POOL_MAX_IDLE_PER_HOST: usize = 4;
+/// TCP keepalive interval (seconds). TCP 保活间隔（秒）。
+const HTTP_TCP_KEEPALIVE_SECS: u64 = 60;
+/// HTTP/2 keepalive interval (seconds). HTTP/2 保活间隔（秒）。
+const HTTP2_KEEPALIVE_INTERVAL_SECS: u64 = 10;
+/// HTTP/2 keepalive timeout (seconds). HTTP/2 保活超时（秒）。
+const HTTP2_KEEPALIVE_TIMEOUT_SECS: u64 = 5;
+/// Request timeout (milliseconds). 请求超时（毫秒）。
+const HTTP_TIMEOUT_MS: u64 = 3000;
+/// Connect timeout (milliseconds). 连接超时（毫秒）。
+const HTTP_CONNECT_TIMEOUT_MS: u64 = 2000;
+
+/// Shared HTTP client builder for SWQOS clients; call `.build().unwrap()` or override pool first. SWQOS 共用 HTTP 客户端构建器。
+pub fn default_http_client_builder() -> reqwest::ClientBuilder {
+    Client::builder()
+        .pool_idle_timeout(Duration::from_secs(HTTP_POOL_IDLE_TIMEOUT_SECS))
+        .pool_max_idle_per_host(HTTP_POOL_MAX_IDLE_PER_HOST)
+        .tcp_keepalive(Some(Duration::from_secs(HTTP_TCP_KEEPALIVE_SECS)))
+        .tcp_nodelay(true)
+        .http2_keep_alive_interval(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS))
+        .http2_keep_alive_timeout(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS))
+        .http2_adaptive_window(true)
+        .timeout(Duration::from_millis(HTTP_TIMEOUT_MS))
+        .connect_timeout(Duration::from_millis(HTTP_CONNECT_TIMEOUT_MS))
+}
+
+/// Trade/on-chain error with code and optional instruction index. 交易/链上错误，含错误码与可选指令下标。
 #[derive(Debug, Clone)]
 pub struct TradeError {
     pub code: u32,
@@ -40,7 +71,7 @@ impl From<anyhow::Error> for TradeError {
     }
 }
 
-// 使用高性能序列化
+// High-performance serialization
 
 pub trait FormatBase64VersionedTransaction {
     fn to_base64_string(&self) -> String;
@@ -58,51 +89,64 @@ pub async fn poll_transaction_confirmation(
     txt_sig: Signature,
     wait_confirmation: bool,
 ) -> Result<Signature> {
-    // 如果不需要等待确认，立即返回签名
+    poll_any_transaction_confirmation(rpc, &[txt_sig], wait_confirmation).await
+}
+
+/// Poll multiple signatures in parallel (one RPC call per poll) and return the first one that confirms.
+/// When transactions are submitted to multiple SWQOS channels, each channel produces a different
+/// signature. Only one will land on-chain, so we must check all of them.
+pub async fn poll_any_transaction_confirmation(
+    rpc: &SolanaRpcClient,
+    signatures: &[Signature],
+    wait_confirmation: bool,
+) -> Result<Signature> {
+    if signatures.is_empty() {
+        return Err(anyhow::anyhow!("No signatures to confirm"));
+    }
+    // If no confirmation needed, return first signature immediately
     if !wait_confirmation {
-        return Ok(txt_sig);
+        return Ok(signatures[0]);
     }
 
-    let timeout: Duration = Duration::from_secs(15); // 🔧 增加到15秒，避免网络拥堵时超时
+    let timeout: Duration = Duration::from_secs(15);
     let interval: Duration = Duration::from_millis(1000);
     let start: Instant = Instant::now();
     let mut poll_count = 0u32;
+    // Track which signature landed (confirmed or failed on-chain)
+    let mut landed_sig: Option<Signature> = None;
 
     loop {
         if start.elapsed() >= timeout {
-            return Err(anyhow::anyhow!("Transaction {}'s confirmation timed out", txt_sig));
+            return Err(anyhow::anyhow!("Transaction confirmation timed out after {}s ({} signatures polled)", timeout.as_secs(), signatures.len()));
         }
 
         poll_count += 1;
 
-        let status = rpc.get_signature_statuses(&[txt_sig]).await?;
-        match status.value[0].clone() {
-            Some(status) => {
-                if status.err.is_none()
-                    && (status.confirmation_status
-                        == Some(TransactionConfirmationStatus::Confirmed)
-                        || status.confirmation_status
-                            == Some(TransactionConfirmationStatus::Finalized))
+        let status = rpc.get_signature_statuses(signatures).await?;
+        // Check all signatures for any that confirmed successfully
+        for (i, maybe_status) in status.value.iter().enumerate() {
+            if let Some(s) = maybe_status {
+                if s.err.is_none()
+                    && (s.confirmation_status == Some(TransactionConfirmationStatus::Confirmed)
+                        || s.confirmation_status == Some(TransactionConfirmationStatus::Finalized))
                 {
-                    return Ok(txt_sig);
+                    return Ok(signatures[i]);
                 }
-                // 如果 getSignatureStatuses 返回了错误，立即获取详细信息
-                if status.err.is_some() {
-                    // 直接跳转到获取交易详情
+                // Track the first signature that landed on-chain (even if errored)
+                if landed_sig.is_none() {
+                    landed_sig = Some(signatures[i]);
                 }
-            }
-            None => {
-                // 交易还未上链，继续等待，不调用 getTransaction
-                sleep(interval).await;
-                continue;
             }
         }
 
-        // 优化：只在以下情况调用 getTransaction
-        // 1. getSignatureStatuses 返回了错误
-        // 2. 或者已经轮询了较长时间（超过10次，即10秒）
-        let should_get_transaction = status.value[0].as_ref().map(|s| s.err.is_some()).unwrap_or(false)
-            || poll_count >= 10;
+        // If no signature has any status yet, keep waiting
+        if landed_sig.is_none() {
+            sleep(interval).await;
+            continue;
+        }
+
+        let landed = landed_sig.unwrap();
+        let should_get_transaction = poll_count >= 10;
 
         if !should_get_transaction {
             sleep(interval).await;
@@ -111,7 +155,7 @@ pub async fn poll_transaction_confirmation(
 
         let tx_details = match rpc
             .get_transaction_with_config(
-                &txt_sig,
+                &landed,
                 RpcTransactionConfig {
                     encoding: Some(UiTransactionEncoding::JsonParsed),
                     max_supported_transaction_version: Some(0),
@@ -122,7 +166,7 @@ pub async fn poll_transaction_confirmation(
         {
             Ok(details) => details,
             Err(_) => {
-                // 交易可能还未上链，继续等待
+                // Tx may not be on chain yet, keep waiting
                 sleep(interval).await;
                 continue;
             }
@@ -134,9 +178,9 @@ pub async fn poll_transaction_confirmation(
         } else {
             let meta = meta.unwrap();
             if meta.err.is_none() {
-                return Ok(txt_sig);
+                return Ok(landed);
             } else {
-                // 从 log_messages 中提取错误信息
+                // Extract error message from log_messages
                 let mut error_msg = String::new();
                 if let solana_transaction_status::option_serializer::OptionSerializer::Some(logs) =
                     &meta.log_messages
@@ -162,12 +206,12 @@ pub async fn poll_transaction_confirmation(
                 let tx_err: TransactionError =
                     serde_json::from_value(serde_json::to_value(&ui_err)?)?;
                 
-                // 直接使用Solana原生的InstructionError中的错误码
+                // Use Solana InstructionError codes directly
                 let mut code = 0u32;
                 let mut index = None;
                 match &tx_err {
                     TransactionError::InstructionError(i, i_error) => {
-                        // 直接匹配所有InstructionError类型，Custom也是其中之一
+                        // Match all InstructionError variants including Custom
                         code = match i_error {
                             solana_sdk::instruction::InstructionError::Custom(c) => *c,
                             solana_sdk::instruction::InstructionError::GenericError => 1,
@@ -180,7 +224,7 @@ pub async fn poll_transaction_confirmation(
                             solana_sdk::instruction::InstructionError::MissingRequiredSignature => 8,
                             solana_sdk::instruction::InstructionError::AccountAlreadyInitialized => 9,
                             solana_sdk::instruction::InstructionError::UninitializedAccount => 10,
-                            _ => 999, // 其他未知错误
+                            _ => 999, // Other unknown errors
                         };
                         index = Some(*i);
                     }
@@ -198,11 +242,11 @@ pub async fn poll_transaction_confirmation(
 }
 
 pub async fn send_nb_transaction(client: Client, endpoint: &str, auth_token: &str, transaction: &Transaction) -> Result<Signature, anyhow::Error> {
-    // 序列化交易
+    // Serialize transaction
     let serialized = bincode::serialize(transaction)
         .map_err(|e| anyhow::anyhow!("Transaction serialization failed: {}", e))?;
     
-    // Base64编码
+    // Base64 encode
     let encoded = STANDARD.encode(serialized);
 
     let request_data = json!({
@@ -250,18 +294,12 @@ pub async fn serialize_and_encode(
     Ok(serialized)
 }
 
-pub async fn serialize_transaction_and_encode(
+/// Sync serialize and encode; uses buffer pool when possible for lower allocs and latency.
+pub fn serialize_transaction_and_encode(
     transaction: &impl SerializableTransaction,
     encoding: UiTransactionEncoding,
 ) -> Result<(String, Signature)> {
-    let signature = transaction.get_signature();
-    let serialized_tx = serialize(transaction)?;
-    let serialized = match encoding {
-        UiTransactionEncoding::Base58 => bs58::encode(serialized_tx).into_string(),
-        UiTransactionEncoding::Base64 => STANDARD.encode(serialized_tx),
-        _ => return Err(anyhow::anyhow!("Unsupported encoding")),
-    };
-    Ok((serialized, *signature))
+    serialization::serialize_transaction_sync(transaction, encoding)
 }
 
 pub async fn serialize_smart_transaction_and_encode(

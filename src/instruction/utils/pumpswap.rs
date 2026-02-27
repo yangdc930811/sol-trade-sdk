@@ -27,6 +27,9 @@ pub mod seeds {
     pub const USER_VOLUME_ACCUMULATOR_SEED: &[u8] = b"user_volume_accumulator";
     pub const GLOBAL_VOLUME_ACCUMULATOR_SEED: &[u8] = b"global_volume_accumulator";
     pub const FEE_CONFIG_SEED: &[u8] = b"fee_config";
+
+    /// Seed for pool v2 PDA (required by program upgrade, readonly at end of account list)
+    pub const POOL_V2_SEED: &[u8] = b"pool-v2";
 }
 
 /// Constants related to program accounts and authorities
@@ -140,6 +143,16 @@ pub const BUY_DISCRIMINATOR: [u8; 8] = [102, 6, 61, 18, 1, 218, 235, 234];
 pub const BUY_EXACT_QUOTE_IN_DISCRIMINATOR: [u8; 8] = [198, 46, 21, 82, 180, 217, 232, 112];
 pub const SELL_DISCRIMINATOR: [u8; 8] = [51, 230, 133, 164, 1, 127, 131, 173];
 
+/// Pool v2 PDA (seeds: ["pool-v2", base_mint]). Required at end of buy/sell/buy_exact_quote_in accounts.
+#[inline]
+pub fn get_pool_v2_pda(base_mint: &Pubkey) -> Option<Pubkey> {
+    let (pda, _) = Pubkey::find_program_address(
+        &[seeds::POOL_V2_SEED, base_mint.as_ref()],
+        &accounts::AMM_PROGRAM,
+    );
+    Some(pda)
+}
+
 // Find a pool for a specific mint
 pub fn coin_creator_vault_authority(coin_creator: Pubkey) -> Option<Pubkey> {
     get_cached_pda(
@@ -191,6 +204,16 @@ pub fn get_user_volume_accumulator_pda(user: &Pubkey) -> Option<Pubkey> {
             pda.map(|pubkey| pubkey.0)
         },
     )
+}
+
+/// WSOL ATA of UserVolumeAccumulator for Pump AMM (used for cashback remaining accounts).
+pub fn get_user_volume_accumulator_wsol_ata(user: &Pubkey) -> Option<Pubkey> {
+    let accumulator = get_user_volume_accumulator_pda(user)?;
+    Some(crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
+        &accumulator,
+        &crate::constants::WSOL_TOKEN_ACCOUNT,
+        &crate::constants::TOKEN_PROGRAM,
+    ))
 }
 
 pub fn get_global_volume_accumulator_pda() -> Option<Pubkey> {

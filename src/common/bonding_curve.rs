@@ -60,9 +60,13 @@ pub struct BondingCurveAccount {
     pub creator: Pubkey,
     /// Whether this is a mayhem mode token (Token2022)
     pub is_mayhem_mode: bool,
+    /// Whether this coin has cashback enabled (creator fee redirected to users)
+    pub is_cashback_coin: bool,
 }
 
 impl BondingCurveAccount {
+    /// When building from event/parser data (e.g. sol-parser-sdk), pass the token's cashback flag
+    /// so that sell instructions include the correct remaining accounts. From RPC use `from_mint_by_rpc` instead.
     pub fn from_dev_trade(
         bonding_curve: Pubkey,
         mint: &Pubkey,
@@ -70,6 +74,7 @@ impl BondingCurveAccount {
         dev_sol_amount: u64,
         creator: Pubkey,
         is_mayhem_mode: bool,
+        is_cashback_coin: bool,
     ) -> Self {
         let account = if bonding_curve != Pubkey::default() {
             bonding_curve
@@ -87,9 +92,12 @@ impl BondingCurveAccount {
             complete: false,
             creator: creator,
             is_mayhem_mode: is_mayhem_mode,
+            is_cashback_coin,
         }
     }
 
+    /// When building from event/parser data (e.g. sol-parser-sdk), pass the token's cashback flag
+    /// so that sell instructions include the correct remaining accounts. From RPC use `from_mint_by_rpc` instead.
     pub fn from_trade(
         bonding_curve: Pubkey,
         mint: Pubkey,
@@ -99,6 +107,7 @@ impl BondingCurveAccount {
         real_token_reserves: u64,
         real_sol_reserves: u64,
         is_mayhem_mode: bool,
+        is_cashback_coin: bool,
     ) -> Self {
         let account = if bonding_curve != Pubkey::default() {
             bonding_curve
@@ -116,6 +125,7 @@ impl BondingCurveAccount {
             complete: false,
             creator: creator,
             is_mayhem_mode: is_mayhem_mode,
+            is_cashback_coin,
         }
     }
 

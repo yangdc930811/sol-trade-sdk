@@ -68,6 +68,7 @@ pub fn buy_base_input_internal(
     base_reserve: u64,
     quote_reserve: u64,
     coin_creator: &Pubkey,
+    fee: &PumpFee,
 ) -> Result<BuyBaseInputResult, String> {
     if base_reserve == 0 || quote_reserve == 0 {
         return Err("Invalid input: 'baseReserve' or 'quoteReserve' cannot be zero.".to_string());
@@ -87,13 +88,13 @@ pub fn buy_base_input_internal(
     let quote_amount_in = ceil_div(numerator, denominator as u128) as u64;
 
     // Calculate fees
-    let lp_fee = compute_fee(quote_amount_in as u128, LP_FEE_BASIS_POINTS as u128) as u64;
+    let lp_fee = compute_fee(quote_amount_in as u128, fee.lp_fee as u128) as u64;
     let protocol_fee =
-        compute_fee(quote_amount_in as u128, PROTOCOL_FEE_BASIS_POINTS as u128) as u64;
+        compute_fee(quote_amount_in as u128, fee.protocol_fee as u128) as u64;
     let coin_creator_fee = if *coin_creator == Pubkey::default() {
         0
     } else {
-        compute_fee(quote_amount_in as u128, COIN_CREATOR_FEE_BASIS_POINTS as u128) as u64
+        compute_fee(quote_amount_in as u128, fee.creator_fee as u128) as u64
     };
     let total_quote = quote_amount_in + lp_fee + protocol_fee + coin_creator_fee;
 

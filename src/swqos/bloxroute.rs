@@ -49,8 +49,6 @@ impl BloxrouteClient {
     pub fn new(rpc_url: String, endpoint: String, auth_token: String) -> Self {
         let rpc_client = SolanaRpcClient::new(rpc_url);
         let http_client = default_http_client_builder()
-            .pool_idle_timeout(Duration::from_secs(120))
-            .pool_max_idle_per_host(256)
             .build()
             .unwrap();
         Self { rpc_client: Arc::new(rpc_client), endpoint, auth_token, http_client }
@@ -98,7 +96,7 @@ impl BloxrouteClient {
                     println!(" [bloxroute] {} confirmation failed: {:?}", trade_type, start_time.elapsed());
                 }
                 return Err(e);
-            },
+            }
         }
         if wait_confirmation && crate::common::sdk_log::sdk_log_enabled() {
             println!(" signature: {:?}", signature);

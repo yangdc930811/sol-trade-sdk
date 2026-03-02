@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 /// Default pool idle timeout for SWQOS HTTP client (seconds). 连接池空闲超时（秒）。
-const HTTP_POOL_IDLE_TIMEOUT_SECS: u64 = 300;
+const HTTP_POOL_IDLE_TIMEOUT_SECS: u64 = 3600;
 /// Max idle connections per host. 每主机最大空闲连接数。
-const HTTP_POOL_MAX_IDLE_PER_HOST: usize = 4;
+const HTTP_POOL_MAX_IDLE_PER_HOST: usize = 10;
 /// TCP keepalive interval (seconds). TCP 保活间隔（秒）。
 const HTTP_TCP_KEEPALIVE_SECS: u64 = 60;
 /// HTTP/2 keepalive interval (seconds). HTTP/2 保活间隔（秒）。

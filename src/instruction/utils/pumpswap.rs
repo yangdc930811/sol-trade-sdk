@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use rand::seq::IndexedRandom;
 use solana_account_decoder::UiAccountEncoding;
 use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
+use crate::common::fast_fn::{get_associated_token_address_with_program_id_fast, get_cached_pda, PdaCacheKey};
 
 /// PumpSwap 池账户总长度（见 pump-public-docs Breaking Change）：8 字节 discriminator + 244 字节 Pool。
 /// 官方文档：pool structure needs to be 244 bytes (was 243)，含 is_mayhem_mode。DataSize 必须与此一致，否则 getProgramAccounts 会返回 0。
@@ -218,25 +219,38 @@ pub async fn find_pool(rpc: &SolanaRpcClient, mint: &Pubkey) -> Result<Pubkey, a
     Ok(pool_address)
 }
 
-pub(crate) fn coin_creator_vault_authority(coin_creator: Pubkey) -> Pubkey {
-    let (pump_pool_authority, _) = Pubkey::find_program_address(
-        &[b"creator_vault", &coin_creator.to_bytes()],
-        &accounts::AMM_PROGRAM,
-    );
-    pump_pool_authority
+// Find a pool for a specific mint
+pub fn coin_creator_vault_authority(coin_creator: Pubkey) -> Option<Pubkey> {
+    get_cached_pda(
+        PdaCacheKey::PumpSwapVaultAuthority(coin_creator), || {
+            let (pump_pool_authority, _) = Pubkey::find_program_address(
+                &[b"creator_vault", &coin_creator.to_bytes()],
+                &accounts::AMM_PROGRAM,
+            );
+            Some(pump_pool_authority)
+        },
+    )
 }
 
-pub(crate) fn coin_creator_vault_ata(coin_creator: Pubkey, quote_mint: Pubkey) -> Pubkey {
-    let creator_vault_authority = coin_creator_vault_authority(coin_creator);
-    let associated_token_creator_vault_authority = get_associated_token_address_with_program_id(
-        &creator_vault_authority,
-        &quote_mint,
-        &TOKEN_PROGRAM,
-    );
-    associated_token_creator_vault_authority
+pub fn coin_creator_vault_ata(coin_creator: Pubkey, quote_mint: Pubkey) -> Option<Pubkey> {
+    get_cached_pda(
+        PdaCacheKey::PumpSwapVaultAta(coin_creator, quote_mint), || {
+            if let Some(creator_vault_authority) = coin_creator_vault_authority(coin_creator) {
+                let coin_creator_vault_ata = get_associated_token_address_with_program_id_fast(
+                    &creator_vault_authority,
+                    &quote_mint,
+                    &TOKEN_PROGRAM,
+                );
+
+                return Some(coin_creator_vault_ata);
+            }
+
+            None
+        },
+    )
 }
 
-pub(crate) fn fee_recipient_ata(fee_recipient: Pubkey, quote_mint: Pubkey) -> Pubkey {
+pub fn fee_recipient_ata(fee_recipient: Pubkey, quote_mint: Pubkey) -> Pubkey {
     let associated_token_fee_recipient =
         crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
             &fee_recipient,

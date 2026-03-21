@@ -433,8 +433,8 @@ impl PumpSwapParams {
             pool_quote_token_account: pool_data.pool_quote_token_account,
             pool_base_token_reserves: pool_base_token_reserves,
             pool_quote_token_reserves: pool_quote_token_reserves,
-            coin_creator_vault_ata: coin_creator_vault_ata,
-            coin_creator_vault_authority: coin_creator_vault_authority,
+            coin_creator_vault_ata: coin_creator_vault_ata.unwrap(),
+            coin_creator_vault_authority: coin_creator_vault_authority.unwrap(),
             base_token_program: if pool_data.pool_base_token_account == base_token_program_ata {
                 crate::constants::TOKEN_PROGRAM
             } else {
@@ -598,7 +598,7 @@ impl BonkParams {
                 &crate::constants::WSOL_TOKEN_ACCOUNT
             },
         )
-        .unwrap();
+            .unwrap();
         let pool_data =
             crate::instruction::utils::bonk::fetch_pool_state(rpc, &pool_address).await?;
         let token_account = rpc.get_account(&pool_data.base_mint).await?;
@@ -697,7 +697,7 @@ impl RaydiumCpmmParams {
                 &pool.token0_mint,
                 &pool.token1_mint,
             )
-            .await?;
+                .await?;
         Ok(Self {
             pool_state: *pool_address,
             amm_config: pool.amm_config,

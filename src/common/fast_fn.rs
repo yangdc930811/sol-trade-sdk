@@ -112,7 +112,7 @@ pub fn _create_associated_token_account_idempotent_fast(
         && !mint.eq(&crate::constants::WSOL_TOKEN_ACCOUNT)
         && !mint.eq(&crate::constants::SOL_TOKEN_ACCOUNT)
         && (token_program.eq(&crate::constants::TOKEN_PROGRAM)
-            || token_program.eq(&crate::constants::TOKEN_PROGRAM_2022))
+        || token_program.eq(&crate::constants::TOKEN_PROGRAM_2022))
     {
         // Use cache to get instruction
         get_cached_instructions(cache_key, || {
@@ -158,6 +158,14 @@ pub enum PdaCacheKey {
     BonkPool(Pubkey, Pubkey),
     BonkVault(Pubkey, Pubkey),
     PumpSwapUserVolume(Pubkey),
+    PumpSwapVaultAuthority(Pubkey),
+    PumpSwapVaultAta(Pubkey, Pubkey),
+    MeteoraDlmmBinArrayBitmapExtension(Pubkey),
+    OrcaOracle(Pubkey),
+    OrcaTickArrayAddress(Pubkey, i32),
+    RaydiumClmmTickArrayBitmapExtension(Pubkey),
+    RaydiumClmmTickArray(Pubkey, i32),  // 获取交易时需要的额外key
+    MeteoraDlmmBinArray(Pubkey, i64),  // 获取交易时需要的额外key
     PumpSwapPoolV2(Pubkey),
 }
 
@@ -256,14 +264,14 @@ fn _get_associated_token_address_with_program_id_fast(
         && !token_mint_address.eq(&crate::constants::WSOL_TOKEN_ACCOUNT)
         && !token_mint_address.eq(&crate::constants::SOL_TOKEN_ACCOUNT)
         && (token_program_id.eq(&crate::constants::TOKEN_PROGRAM)
-            || token_program_id.eq(&crate::constants::TOKEN_PROGRAM_2022))
+        || token_program_id.eq(&crate::constants::TOKEN_PROGRAM_2022))
     {
         super::seed::get_associated_token_address_with_program_id_use_seed(
             wallet_address,
             token_mint_address,
             token_program_id,
         )
-        .unwrap()
+            .unwrap()
     } else {
         get_associated_token_address_with_program_id(
             wallet_address,
@@ -305,7 +313,7 @@ pub fn fast_init(payer: &Pubkey) {
                 &payer,
                 &[],
             )
-            .unwrap()]
+                .unwrap()]
         },
     );
 }

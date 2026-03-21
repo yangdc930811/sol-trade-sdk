@@ -58,11 +58,11 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         let is_wsol = (base_mint == crate::constants::WSOL_TOKEN_ACCOUNT
             && quote_mint != crate::constants::USDC_TOKEN_ACCOUNT)
             || (quote_mint == crate::constants::WSOL_TOKEN_ACCOUNT
-                && base_mint != crate::constants::USDC_TOKEN_ACCOUNT);
+            && base_mint != crate::constants::USDC_TOKEN_ACCOUNT);
         let is_usdc = (base_mint == crate::constants::USDC_TOKEN_ACCOUNT
             && quote_mint != crate::constants::WSOL_TOKEN_ACCOUNT)
             || (quote_mint == crate::constants::USDC_TOKEN_ACCOUNT
-                && base_mint != crate::constants::WSOL_TOKEN_ACCOUNT);
+            && base_mint != crate::constants::WSOL_TOKEN_ACCOUNT);
         if !is_wsol && !is_usdc {
             return Err(anyhow!("Pool must contain WSOL or USDC"));
         }
@@ -83,9 +83,11 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
                 pool_base_token_reserves,
                 pool_quote_token_reserves,
-                &creator,
+                protocol_params.lp_fee,
+                protocol_params.protocol_fee,
+                protocol_params.coin_creator_fee,
             )
-            .unwrap();
+                .unwrap();
             // base_amount_out, max_quote_amount_in
             (result.base, result.max_quote)
         } else {
@@ -94,9 +96,11 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
                 pool_base_token_reserves,
                 pool_quote_token_reserves,
-                &creator,
+                protocol_params.lp_fee,
+                protocol_params.protocol_fee,
+                protocol_params.coin_creator_fee,
             )
-            .unwrap();
+                .unwrap();
             // min_quote_amount_out, base_amount_in
             (result.min_quote, params.input_amount.unwrap_or(0))
         };
@@ -260,11 +264,11 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         let is_wsol = (base_mint == crate::constants::WSOL_TOKEN_ACCOUNT
             && quote_mint != crate::constants::USDC_TOKEN_ACCOUNT)
             || (quote_mint == crate::constants::WSOL_TOKEN_ACCOUNT
-                && base_mint != crate::constants::USDC_TOKEN_ACCOUNT);
+            && base_mint != crate::constants::USDC_TOKEN_ACCOUNT);
         let is_usdc = (base_mint == crate::constants::USDC_TOKEN_ACCOUNT
             && quote_mint != crate::constants::WSOL_TOKEN_ACCOUNT)
             || (quote_mint == crate::constants::USDC_TOKEN_ACCOUNT
-                && base_mint != crate::constants::WSOL_TOKEN_ACCOUNT);
+            && base_mint != crate::constants::WSOL_TOKEN_ACCOUNT);
         if !is_wsol && !is_usdc {
             return Err(anyhow!("Pool must contain WSOL or USDC"));
         }
@@ -289,9 +293,11 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
                 pool_base_token_reserves,
                 pool_quote_token_reserves,
-                &creator,
+                protocol_params.lp_fee,
+                protocol_params.protocol_fee,
+                protocol_params.coin_creator_fee,
             )
-            .unwrap();
+                .unwrap();
             // base_amount_in, min_quote_amount_out
             (params.input_amount.unwrap(), result.min_quote)
         } else {
@@ -300,9 +306,11 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
                 pool_base_token_reserves,
                 pool_quote_token_reserves,
-                &creator,
+                protocol_params.lp_fee,
+                protocol_params.protocol_fee,
+                protocol_params.coin_creator_fee,
             )
-            .unwrap();
+                .unwrap();
             // max_quote_amount_in, base_amount_out
             (result.max_quote, result.base)
         };

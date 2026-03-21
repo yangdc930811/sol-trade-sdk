@@ -293,6 +293,9 @@ pub struct PumpSwapParams {
     pub pool_base_token_reserves: u64,
     /// Quote token reserves in the pool
     pub pool_quote_token_reserves: u64,
+    pub lp_fee: u64,
+    pub protocol_fee: u64,
+    pub coin_creator_fee: u64,
     /// Coin creator vault ATA
     pub coin_creator_vault_ata: Pubkey,
     /// Coin creator vault authority
@@ -332,6 +335,9 @@ impl PumpSwapParams {
             pool_quote_token_account,
             pool_base_token_reserves,
             pool_quote_token_reserves,
+            lp_fee: 0,
+            protocol_fee: 0,
+            coin_creator_fee: 0,
             coin_creator_vault_ata,
             coin_creator_vault_authority,
             base_token_program,
@@ -433,6 +439,9 @@ impl PumpSwapParams {
             pool_quote_token_account: pool_data.pool_quote_token_account,
             pool_base_token_reserves: pool_base_token_reserves,
             pool_quote_token_reserves: pool_quote_token_reserves,
+            lp_fee: 0,
+            protocol_fee: 0,
+            coin_creator_fee: 0,
             coin_creator_vault_ata: coin_creator_vault_ata.unwrap(),
             coin_creator_vault_authority: coin_creator_vault_authority.unwrap(),
             base_token_program: if pool_data.pool_base_token_account == base_token_program_ata {

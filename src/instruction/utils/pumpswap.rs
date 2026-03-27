@@ -184,6 +184,19 @@ pub fn get_pool_v2_pda(base_mint: &Pubkey) -> Option<Pubkey> {
     Some(pda)
 }
 
+#[inline]
+pub fn get_pool_v2_pda_from_cache(base_mint: &Pubkey) -> Option<Pubkey> {
+    get_cached_pda(
+        PdaCacheKey::PumpSwapPoolV2(*base_mint), || {
+            let (pda, _) = Pubkey::find_program_address(
+                &[seeds::POOL_V2_SEED, base_mint.as_ref()],
+                &accounts::AMM_PROGRAM,
+            );
+            Some(pda)
+        },
+    )
+}
+
 /// Pump 程序上的 pool-authority PDA（canonical pool 的 creator），与 @pump-fun/pump-swap-sdk 一致。
 #[inline]
 pub fn get_pump_pool_authority_pda(mint: &Pubkey) -> Pubkey {
@@ -191,7 +204,7 @@ pub fn get_pump_pool_authority_pda(mint: &Pubkey) -> Pubkey {
         &[seeds::POOL_AUTHORITY_SEED, mint.as_ref()],
         &accounts::PUMP_PROGRAM_ID,
     )
-    .0
+        .0
 }
 
 /// Canonical Pump 池 PDA：index=0，creator=pumpPoolAuthorityPda(mint)，base_mint=mint，quote_mint=WSOL。

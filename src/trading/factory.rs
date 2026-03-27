@@ -6,7 +6,9 @@ use crate::instruction::{
     raydium_amm_v4::RaydiumAmmV4InstructionBuilder, raydium_cpmm::RaydiumCpmmInstructionBuilder,
 };
 
-use super::core::{executor::GenericTradeExecutor, traits::TradeExecutor};
+use super::core::{executor::GenericTradeExecutor, params::SwapParams, traits::TradeExecutor};
+use anyhow::anyhow;
+use solana_sdk::signature::Signature;
 
 /// 支持的交易协议
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,8 +17,11 @@ pub enum DexType {
     PumpSwap,
     Bonk,
     RaydiumCpmm,
+    RaydiumClmm,
     RaydiumAmmV4,
     MeteoraDammV2,
+    MeteoraDlmm,
+    Orca,
 }
 
 /// 交易工厂 - 用于创建不同协议的交易执行器
@@ -30,9 +35,33 @@ impl TradeFactory {
             DexType::PumpSwap => Self::pumpswap_executor(),
             DexType::Bonk => Self::bonk_executor(),
             DexType::RaydiumCpmm => Self::raydium_cpmm_executor(),
+            DexType::RaydiumClmm => Self::raydium_clmm_executor(),
             DexType::RaydiumAmmV4 => Self::raydium_amm_v4_executor(),
             DexType::MeteoraDammV2 => Self::meteora_damm_v2_executor(),
+            DexType::MeteoraDlmm => Self::meteora_dlmm_executor(),
+            DexType::Orca => Self::orca_executor(),
         }
+    }
+
+    #[inline]
+    fn raydium_clmm_executor() -> Arc<dyn TradeExecutor> {
+        static INSTANCE: std::sync::LazyLock<Arc<dyn TradeExecutor>> =
+            std::sync::LazyLock::new(|| Arc::new(UnsupportedTradeExecutor("RaydiumClmm")));
+        INSTANCE.clone()
+    }
+
+    #[inline]
+    fn meteora_dlmm_executor() -> Arc<dyn TradeExecutor> {
+        static INSTANCE: std::sync::LazyLock<Arc<dyn TradeExecutor>> =
+            std::sync::LazyLock::new(|| Arc::new(UnsupportedTradeExecutor("MeteoraDlmm")));
+        INSTANCE.clone()
+    }
+
+    #[inline]
+    fn orca_executor() -> Arc<dyn TradeExecutor> {
+        static INSTANCE: std::sync::LazyLock<Arc<dyn TradeExecutor>> =
+            std::sync::LazyLock::new(|| Arc::new(UnsupportedTradeExecutor("Orca")));
+        INSTANCE.clone()
     }
 
     // Static instances created at compile time - zero runtime overhead
@@ -94,5 +123,21 @@ impl TradeFactory {
                 Arc::new(GenericTradeExecutor::new(instruction_builder, "MeteoraDammV2"))
             });
         INSTANCE.clone()
+    }
+}
+
+struct UnsupportedTradeExecutor(&'static str);
+
+#[async_trait::async_trait]
+impl TradeExecutor for UnsupportedTradeExecutor {
+    async fn swap(
+        &self,
+        _params: SwapParams,
+    ) -> anyhow::Result<(bool, Vec<Signature>, Option<anyhow::Error>)> {
+        Err(anyhow!("{} is not supported by the current SDK executor", self.0))
+    }
+
+    fn protocol_name(&self) -> &'static str {
+        self.0
     }
 }

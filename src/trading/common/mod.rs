@@ -1,3 +1,4 @@
+pub mod arb_transaction_builder;
 pub mod compute_budget_manager;
 pub mod nonce_manager;
 pub mod transaction_builder;

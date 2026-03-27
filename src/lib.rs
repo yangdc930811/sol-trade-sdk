@@ -7,6 +7,7 @@ pub mod trading;
 pub mod utils;
 use crate::common::nonce_cache::DurableNonceInfo;
 use crate::common::sdk_log;
+use crate::common::AnyResult;
 use crate::common::GasFeeStrategy;
 use crate::common::{InfrastructureConfig, TradeConfig};
 #[cfg(feature = "perf-trace")]
@@ -24,21 +25,31 @@ pub use crate::swqos::SwqosTransport;
 use crate::trading::core::params::BonkParams;
 use crate::trading::core::params::DexParamEnum;
 use crate::trading::core::params::MeteoraDammV2Params;
+use crate::trading::core::params::MeteoraDlmmParams;
+use crate::trading::core::params::OrcaParams;
 use crate::trading::core::params::PumpFunParams;
 use crate::trading::core::params::PumpSwapParams;
 use crate::trading::core::params::RaydiumAmmV4Params;
+use crate::trading::core::params::RaydiumClmmParams;
 use crate::trading::core::params::RaydiumCpmmParams;
 use crate::trading::factory::DexType;
 use crate::trading::MiddlewareManager;
+use crate::trading::common::transaction_builder::build_transaction as sdk_build_transaction;
+use crate::trading::core::async_executor::execute_parallel;
+use crate::trading::core::params::SenderConcurrencyConfig;
 use crate::trading::SwapParams;
 use crate::trading::TradeFactory;
 use common::SolanaRpcClient;
 use parking_lot::Mutex;
 use rustls::crypto::{ring::default_provider, CryptoProvider};
+use solana_client::rpc_config::{RpcSendTransactionConfig, RpcSimulateTransactionConfig};
+use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_sdk::hash::Hash;
+use solana_sdk::instruction::Instruction;
 use solana_sdk::message::AddressLookupTableAccount;
 use solana_sdk::signer::Signer;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair, signature::Signature};
+use solana_transaction_status::UiTransactionEncoding;
 use std::sync::Arc;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, warn};
@@ -51,8 +62,11 @@ fn validate_protocol_params(dex_type: DexType, params: &DexParamEnum) -> bool {
         DexType::PumpSwap => params.as_any().downcast_ref::<PumpSwapParams>().is_some(),
         DexType::Bonk => params.as_any().downcast_ref::<BonkParams>().is_some(),
         DexType::RaydiumCpmm => params.as_any().downcast_ref::<RaydiumCpmmParams>().is_some(),
+        DexType::RaydiumClmm => params.as_any().downcast_ref::<RaydiumClmmParams>().is_some(),
         DexType::RaydiumAmmV4 => params.as_any().downcast_ref::<RaydiumAmmV4Params>().is_some(),
         DexType::MeteoraDammV2 => params.as_any().downcast_ref::<MeteoraDammV2Params>().is_some(),
+        DexType::MeteoraDlmm => params.as_any().downcast_ref::<MeteoraDlmmParams>().is_some(),
+        DexType::Orca => params.as_any().downcast_ref::<OrcaParams>().is_some(),
     }
 }
 
@@ -233,6 +247,8 @@ pub fn recommended_sender_thread_core_indices(swqos_count: usize) -> Option<Vec<
 pub struct TradingClient {
     /// The keypair used for signing all transactions
     pub payer: Arc<Keypair>,
+    /// Backward-compatible direct RPC field. Mirrors `infrastructure.rpc`.
+    pub rpc: Arc<SolanaRpcClient>,
     /// Shared infrastructure (RPC client, SWQOS clients)
     /// Can be shared across multiple TradingClient instances with different wallets
     pub infrastructure: Arc<TradingInfrastructure>,
@@ -264,6 +280,7 @@ impl Clone for TradingClient {
     fn clone(&self) -> Self {
         Self {
             payer: self.payer.clone(),
+            rpc: self.rpc.clone(),
             infrastructure: self.infrastructure.clone(),
             middleware_manager: self.middleware_manager.clone(),
             use_seed_optimize: self.use_seed_optimize,
@@ -372,6 +389,17 @@ pub struct TradeSellParams {
     pub grpc_recv_us: Option<i64>,
 }
 
+#[derive(Clone)]
+pub struct TradeArbParams {
+    pub instructions: Vec<Instruction>,
+    pub recent_blockhash: Option<Hash>,
+    pub address_lookup_table_account: Option<AddressLookupTableAccount>,
+    pub durable_nonce: Option<DurableNonceInfo>,
+    pub gas_fee_strategy: GasFeeStrategy,
+    pub with_tip: bool,
+    pub simulate: bool,
+}
+
 impl TradingClient {
     /// Create a TradingClient from shared infrastructure (fast path)
     ///
@@ -398,6 +426,7 @@ impl TradingClient {
 
         Self {
             payer,
+            rpc: infrastructure.rpc.clone(),
             infrastructure,
             middleware_manager: None,
             use_seed_optimize,
@@ -444,6 +473,7 @@ impl TradingClient {
 
         Self {
             payer,
+            rpc: infrastructure.rpc.clone(),
             infrastructure,
             middleware_manager: None,
             use_seed_optimize,
@@ -623,6 +653,7 @@ impl TradingClient {
         // 并发/核心相关由 infrastructure 预计算，用户无需配置
         let instance = Self {
             payer,
+            rpc: infrastructure.rpc.clone(),
             infrastructure: infrastructure.clone(),
             middleware_manager: None,
             use_seed_optimize: trade_config.use_seed_optimize,
@@ -923,6 +954,177 @@ impl TradingClient {
         let result =
             swap_result.map(|(success, sigs, err)| (success, sigs, err.map(TradeError::from)));
         return result;
+    }
+
+    #[inline]
+    pub async fn send_to_grpc(
+        &self,
+        unit_limit: u32,
+        unit_price: u64,
+        business_instructions: Vec<Instruction>,
+        address_lookup_table_account: Option<AddressLookupTableAccount>,
+        recent_blockhash: Option<Hash>,
+        is_simulate: bool,
+    ) -> AnyResult<Signature> {
+        let transaction = sdk_build_transaction(
+            &self.payer,
+            Some(&self.rpc),
+            unit_limit,
+            unit_price,
+            &business_instructions,
+            address_lookup_table_account.as_ref(),
+            recent_blockhash,
+            self.middleware_manager.as_ref(),
+            "grpc",
+            true,
+            false,
+            &Pubkey::default(),
+            0.0,
+            None,
+        )
+        .await?;
+
+        let signature = transaction
+            .signatures
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Transaction has no signatures"))?
+            .clone();
+
+        if is_simulate {
+            let simulate_result = self
+                .rpc
+                .simulate_transaction_with_config(
+                    &transaction,
+                    RpcSimulateTransactionConfig {
+                        sig_verify: false,
+                        replace_recent_blockhash: false,
+                        commitment: Some(CommitmentConfig {
+                            commitment: CommitmentLevel::Processed,
+                        }),
+                        encoding: Some(UiTransactionEncoding::Base64),
+                        accounts: None,
+                        min_context_slot: None,
+                        inner_instructions: true,
+                    },
+                )
+                .await?;
+
+            match simulate_result.value.err {
+                None => {
+                    println!("[Simulation Success] {}", signature);
+                }
+                Some(err) => {
+                    println!("[Simulation Failed] error={:?} signature={:?}", err, signature);
+                }
+            }
+
+            return Ok(signature);
+        }
+
+        let send_result = self
+            .rpc
+            .send_transaction_with_config(
+                &transaction,
+                RpcSendTransactionConfig {
+                    skip_preflight: true,
+                    encoding: Some(UiTransactionEncoding::Base64),
+                    min_context_slot: None,
+                    preflight_commitment: None,
+                    max_retries: None,
+                },
+            )
+            .await?;
+        println!("[Transaction Signature] {}", send_result);
+        Ok(signature)
+    }
+
+    #[inline]
+    pub async fn swap_arb(
+        &self,
+        params: TradeArbParams,
+    ) -> Result<(bool, Vec<Signature>, Option<TradeError>), anyhow::Error> {
+        if params.simulate {
+            let gas_fee_configs = params.gas_fee_strategy.get_strategies(TradeType::Buy);
+            let default_config = gas_fee_configs
+                .iter()
+                .find(|config| config.0 == crate::swqos::SwqosType::Default)
+                .ok_or_else(|| anyhow::anyhow!("No default gas fee strategy found"))?;
+            let tip = if params.with_tip { default_config.2.tip } else { 0.0 };
+            let transaction = sdk_build_transaction(
+                &self.payer,
+                Some(&self.rpc),
+                default_config.2.cu_limit,
+                default_config.2.cu_price,
+                &params.instructions,
+                params.address_lookup_table_account.as_ref(),
+                params.recent_blockhash,
+                self.middleware_manager.as_ref(),
+                "arb",
+                true,
+                false,
+                &Pubkey::default(),
+                tip,
+                params.durable_nonce.as_ref(),
+            )
+            .await?;
+
+            let signature = transaction
+                .signatures
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Transaction has no signatures"))?
+                .clone();
+
+            let simulate_result = self
+                .rpc
+                .simulate_transaction_with_config(
+                    &transaction,
+                    RpcSimulateTransactionConfig {
+                        sig_verify: false,
+                        replace_recent_blockhash: false,
+                        commitment: Some(CommitmentConfig {
+                            commitment: CommitmentLevel::Processed,
+                        }),
+                        encoding: Some(UiTransactionEncoding::Base64),
+                        accounts: None,
+                        min_context_slot: None,
+                        inner_instructions: true,
+                    },
+                )
+                .await?;
+
+            return Ok(match simulate_result.value.err {
+                None => (true, vec![signature], None),
+                Some(err) => (false, vec![signature], Some(TradeError::from(anyhow::anyhow!("{:?}", err)))),
+            });
+        }
+
+        let sender_config = SenderConcurrencyConfig {
+            sender_thread_cores: self.sender_thread_cores.clone(),
+            effective_core_ids: self.effective_core_ids.clone(),
+            max_sender_concurrency: self.max_sender_concurrency,
+        };
+
+        let result = execute_parallel(
+            self.infrastructure.swqos_clients.as_slice(),
+            self.payer.clone(),
+            Some(&self.rpc),
+            params.instructions,
+            params.address_lookup_table_account,
+            params.recent_blockhash,
+            params.durable_nonce,
+            self.middleware_manager.clone(),
+            "arb",
+            true,
+            false,
+            params.with_tip,
+            params.gas_fee_strategy,
+            self.use_dedicated_sender_threads,
+            sender_config,
+            self.check_min_tip,
+        )
+        .await?;
+
+        Ok((result.0, result.1, result.2.map(TradeError::from)))
     }
 
     /// Execute a sell order for a percentage of the specified token amount

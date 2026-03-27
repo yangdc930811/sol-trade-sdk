@@ -29,8 +29,11 @@ pub enum DexParamEnum {
     PumpSwap(PumpSwapParams),
     Bonk(BonkParams),
     RaydiumCpmm(RaydiumCpmmParams),
+    RaydiumClmm(RaydiumClmmParams),
     RaydiumAmmV4(RaydiumAmmV4Params),
     MeteoraDammV2(MeteoraDammV2Params),
+    MeteoraDlmm(MeteoraDlmmParams),
+    Orca(OrcaParams),
 }
 
 impl DexParamEnum {
@@ -42,8 +45,11 @@ impl DexParamEnum {
             DexParamEnum::PumpSwap(p) => p,
             DexParamEnum::Bonk(p) => p,
             DexParamEnum::RaydiumCpmm(p) => p,
+            DexParamEnum::RaydiumClmm(p) => p,
             DexParamEnum::RaydiumAmmV4(p) => p,
             DexParamEnum::MeteoraDammV2(p) => p,
+            DexParamEnum::MeteoraDlmm(p) => p,
+            DexParamEnum::Orca(p) => p,
         }
     }
 }
@@ -664,6 +670,19 @@ pub struct RaydiumCpmmParams {
     pub observation_state: Pubkey,
 }
 
+#[derive(Clone)]
+pub struct RaydiumClmmParams {
+    pub amm_config: Pubkey,
+    pub pool: Pubkey,
+    pub input_token_vault: Pubkey,
+    pub output_token_vault: Pubkey,
+    pub observation_key: Pubkey,
+    pub tick_arrays: Vec<Pubkey>,
+    pub other_amount_threshold: u64,
+    pub sqrt_price_limit_x64: u128,
+    pub is_base_input: bool,
+}
+
 impl RaydiumCpmmParams {
     pub fn from_trade(
         pool_state: Pubkey,
@@ -785,6 +804,34 @@ pub struct MeteoraDammV2Params {
     pub token_b_mint: Pubkey,
     pub token_a_program: Pubkey,
     pub token_b_program: Pubkey,
+}
+
+#[derive(Clone)]
+pub struct MeteoraDlmmParams {
+    pub lb_pair: Pubkey,
+    pub reserve_x: Pubkey,
+    pub reserve_y: Pubkey,
+    pub token_x_mint: Pubkey,
+    pub token_y_mint: Pubkey,
+    pub oracle: Pubkey,
+    pub token_x_program: Pubkey,
+    pub token_y_program: Pubkey,
+    pub bin_array: Vec<Pubkey>,
+}
+
+#[derive(Clone)]
+pub struct OrcaParams {
+    pub pool: Pubkey,
+    pub token_mint_a: Pubkey,
+    pub token_mint_b: Pubkey,
+    pub vault_a: Pubkey,
+    pub vault_b: Pubkey,
+    pub tick_array0: Pubkey,
+    pub tick_array1: Pubkey,
+    pub tick_array2: Pubkey,
+    pub oracle: Pubkey,
+    pub amount_specified_is_input: bool,
+    pub a_to_b: bool,
 }
 
 impl MeteoraDammV2Params {

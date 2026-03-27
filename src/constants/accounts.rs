@@ -57,3 +57,13 @@ pub const RENT_META: solana_sdk::instruction::AccountMeta =
 
 pub const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
     pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+
+pub const MEMO_PROGRAM: Pubkey = pubkey!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+pub const MEMO_PROGRAM_META: solana_sdk::instruction::AccountMeta =
+    solana_sdk::instruction::AccountMeta {
+        pubkey: MEMO_PROGRAM,
+        is_signer: false,
+        is_writable: false,
+    };
+
+pub const CLOCK_PROGRAM: Pubkey = pubkey!("SysvarC1ock11111111111111111111111111111111");

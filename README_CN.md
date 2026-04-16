@@ -48,7 +48,7 @@
   - [⚡ 交易参数](#-交易参数)
   - [📊 使用示例汇总表格](#-使用示例汇总表格)
   - [⚙️ SWQoS 服务配置说明](#️-swqos-服务配置说明)
-  - [Astralane QUIC（低延迟）](#astralane-quic低延迟)
+  - [Astralane（Binary / Plain / QUIC）](#astralanebinary--plain--quic)
   - [🔧 中间件系统说明](#-中间件系统说明)
   - [🔍 地址查找表](#-地址查找表)
   - [🔍 Nonce 缓存](#-nonce-缓存)
@@ -60,6 +60,17 @@
 - [⚠️ 重要注意事项](#️-重要注意事项)
 
 ---
+
+## 📦 SDK 版本
+
+本 SDK 提供多种语言版本：
+
+| 语言 | 仓库 | 描述 |
+|------|------|------|
+| **Rust** | [sol-trade-sdk](https://github.com/0xfnzero/sol-trade-sdk) | 超低延迟，零拷贝优化 |
+| **Node.js** | [sol-trade-sdk-nodejs](https://github.com/0xfnzero/sol-trade-sdk-nodejs) | TypeScript/JavaScript，Node.js 支持 |
+| **Python** | [sol-trade-sdk-python](https://github.com/0xfnzero/sol-trade-sdk-python) | 原生 async/await 支持 |
+| **Go** | [sol-trade-sdk-golang](https://github.com/0xfnzero/sol-trade-sdk-golang) | 并发安全，goroutine 支持 |
 
 ## ✨ 项目特性
 
@@ -90,14 +101,14 @@ git clone https://github.com/0xfnzero/sol-trade-sdk
 
 ```toml
 # 添加到您的 Cargo.toml
-sol-trade-sdk = { path = "./sol-trade-sdk", version = "4.0.2" }
+sol-trade-sdk = { path = "./sol-trade-sdk", version = "4.0.3" }
 ```
 
 ### 使用 crates.io
 
 ```toml
 # 添加到您的 Cargo.toml
-sol-trade-sdk = "4.0.2"
+sol-trade-sdk = "4.0.3"
 ```
 
 ## 🛠️ 使用示例
@@ -120,21 +131,24 @@ let swqos_configs: Vec<SwqosConfig> = vec![
     SwqosConfig::Default(rpc_url.clone()),
     SwqosConfig::Jito("your uuid".to_string(), SwqosRegion::Frankfurt, None),
     SwqosConfig::Bloxroute("your api_token".to_string(), SwqosRegion::Frankfurt, None),
-    // Astralane：第4个参数 None 为 HTTP，Some(SwqosTransport::Quic) 为 QUIC；同一 API key
-    SwqosConfig::Astralane("your_astralane_api_key".to_string(), SwqosRegion::Frankfurt, None, None), // HTTP
+    // Astralane：第4个参数为 AstralaneTransport — Binary（默认）、Plain（/iris）或 Quic
+    SwqosConfig::Astralane("your_astralane_api_key".to_string(), SwqosRegion::Frankfurt, None, None), // Binary /irisb
     SwqosConfig::Astralane(
         "your_astralane_api_key".to_string(),
         SwqosRegion::Frankfurt,
         None,
-        Some(SwqosTransport::Quic),
+        Some(AstralaneTransport::Quic),
     ), // QUIC
 ];
 // 创建 TradeConfig 实例
-let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment);
-
-// 可选：自定义 WSOL ATA 与 Seed 优化
-// let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment)
-//     .with_wsol_ata_config(true, true);  // create_wsol_ata_on_startup, use_seed_optimize
+let trade_config = TradeConfig::builder(rpc_url, swqos_configs, commitment)
+    // .create_wsol_ata_on_startup(true)  // 默认: true  - 初始化时检查并创建 WSOL ATA
+    // .use_seed_optimize(true)            // 默认: true  - ATA 操作启用 seed 优化
+    // .log_enabled(true)                  // 默认: true  - SDK 计时 / SWQOS 日志
+    // .check_min_tip(false)               // 默认: false - 过滤低于最低小费的 SWQOS
+    // .swqos_cores_from_end(false)        // 默认: false - 将 SWQOS 绑定到末尾 N 个 CPU 核心
+    // .mev_protection(false)              // 默认: false - MEV（Astralane QUIC :9000 或 HTTP mev-protect / BlockRazor）
+    .build();
 
 // 创建 TradingClient
 let client = TradingClient::new(Arc::new(payer), trade_config).await;
@@ -265,28 +279,28 @@ let bloxroute_config = SwqosConfig::Bloxroute(
 
 当使用多个MEV服务时，需要使用`Durable Nonce`。你需要使用`fetch_nonce_info`函数获取最新的`nonce`值，并在交易的时候将`durable_nonce`填入交易参数。
 
-#### Astralane QUIC（低延迟）
+#### Astralane（Binary / Plain / QUIC）
 
-Astralane 支持 **HTTP** 与 **QUIC** 两种传输方式。QUIC 可减少连接开销，降低提交延迟。使用 QUIC 时，将 `SwqosConfig::Astralane` 的第四个参数设为 `Some(SwqosTransport::Quic)`。Astralane 的 QUIC 服务使用**单一端点**（无分区域端点），选 QUIC 时 SDK 会忽略 `region` 与可选自定义 URL；为与其他 SWQoS 配置一致，可传入相同 region。
+Astralane 支持 **Binary** HTTP（`/irisb`）、**Plain** HTTP（`/iris`）与 **QUIC**（`host:7000`，全局 `mev_protection` 为 true 时用 `:9000`）。第四个参数：`Some(AstralaneTransport::Plain)`、`Some(AstralaneTransport::Quic)`，或 `None` 表示 **Binary**（默认）。全局 `mev_protection` 会在 HTTP 上附加 `mev-protect=true`，或为 QUIC 选择 9000 端口。
 
 ```rust
-use sol_trade_sdk::{SwqosConfig, SwqosRegion, SwqosTransport};
+use sol_trade_sdk::{SwqosConfig, SwqosRegion, AstralaneTransport};
 
-// Astralane 使用 QUIC（低延迟）；region 会被忽略（QUIC 单一端点）
 let swqos_configs: Vec<SwqosConfig> = vec![
     SwqosConfig::Default(rpc_url.clone()),
     SwqosConfig::Astralane(
         "your_astralane_api_key".to_string(),
-        SwqosRegion::Frankfurt,  // 与其他服务一致即可；QUIC 时会被忽略
+        SwqosRegion::Frankfurt,
         None,
-        Some(SwqosTransport::Quic),
+        Some(AstralaneTransport::Quic),
     ),
 ];
 // 然后照常使用 swqos_configs 创建 TradeConfig / TradingClient
 ```
 
-- **HTTP**（默认）：第四个参数为 `None` 或 `Some(SwqosTransport::Http)`；region 与可选自定义 URL 生效。
-- **QUIC**：第四个参数为 `Some(SwqosTransport::Quic)`；SDK 使用单一 QUIC 端点并忽略 region。与 HTTP 使用同一 API key。
+- **Binary**（默认）：`None` 或 `Some(AstralaneTransport::Binary)` — `/irisb`，bincode 正文。
+- **Plain**：`Some(AstralaneTransport::Plain)` — `/iris`。
+- **QUIC**：`Some(AstralaneTransport::Quic)` — 按区域的 `host:7000` / `:9000`（MEV）；同一 API key。
 
 ---
 
@@ -349,7 +363,7 @@ SDK 不会在每次卖出时通过 RPC 拉取 creator_vault（以避免延迟）
 - **FlashBlock**: 高速交易执行，支持 API 密钥认证
 - **BlockRazor**: 高速交易执行，支持 API 密钥认证
 - **Node1**: 高速交易执行，支持 API 密钥认证
-- **Astralane**: 区块链网络加速（支持 HTTP 与 QUIC，见上方 [Astralane QUIC](#astralane-quic低延迟)）
+- **Astralane**: 区块链网络加速（Binary/Plain HTTP 与 QUIC，见 [Astralane](#astralanebinary--plain--quic)）
 
 ## 📁 项目结构
 

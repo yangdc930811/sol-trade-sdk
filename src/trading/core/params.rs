@@ -2,9 +2,8 @@ use crate::common::bonding_curve::BondingCurveAccount;
 use crate::common::nonce_cache::DurableNonceInfo;
 use crate::common::spl_associated_token_account::get_associated_token_address_with_program_id;
 use crate::common::{GasFeeStrategy, SolanaRpcClient};
-use crate::constants::TOKEN_PROGRAM;
 use core_affinity::CoreId;
-use crate::instruction::utils::pumpfun::global_constants::MAYHEM_FEE_RECIPIENT;
+use crate::instruction::utils::pumpfun::is_mayhem_fee_recipient;
 
 /// Concurrency + core binding config for parallel submit (precomputed at SDK init, one param on hot path). Uses Arc so no borrow of SwapParams.
 #[derive(Clone)]
@@ -18,7 +17,7 @@ use crate::swqos::{SwqosClient, TradeType};
 use crate::trading::common::get_multi_token_balances;
 use crate::trading::MiddlewareManager;
 use solana_hash::Hash;
-use solana_sdk::message::AddressLookupTableAccount;
+use solana_message::AddressLookupTableAccount;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use std::sync::Arc;
 
@@ -125,20 +124,22 @@ impl std::fmt::Debug for SwapParams {
 /// PumpFun protocol specific parameters
 /// Configuration parameters specific to PumpFun trading protocol.
 ///
-/// **Creator Rewards Sharing**: Some coins use a dynamic `creator_vault` (fee-sharing config).
-/// Always use the latest on-chain creator/vault when building params for **sell**; do not reuse
-/// cached params from buy. Either fetch fresh data via RPC, or pass `creator_vault` from gRPC
-/// using [`from_trade`](PumpFunParams::from_trade) / [`from_dev_trade`](PumpFunParams::from_dev_trade),
-/// or override with [`with_creator_vault`](PumpFunParams::with_creator_vault).
+/// **Creator vault**: Pump buy/sell instructions always pass `creator_vault` =
+/// `PDA(["creator-vault", bonding_curve.creator])` derived from [`BondingCurveAccount::creator`].
+/// Keep `bonding_curve.creator` in sync with chain (gRPC / RPC); stale `creator_vault` in this struct
+/// does not affect ix building.
 #[derive(Clone)]
 pub struct PumpFunParams {
     pub bonding_curve: Arc<BondingCurveAccount>,
     pub associated_bonding_curve: Pubkey,
-    /// Creator vault PDA. For Creator Rewards Sharing coins this can change; pass latest from gRPC when selling.
+    /// Resolved by [`resolve_creator_vault_for_ix`](crate::instruction::utils::pumpfun::resolve_creator_vault_for_ix): use ix vault when it matches `PDA(creator)` or fee-sharing vault; else `PDA(creator)`.
     pub creator_vault: Pubkey,
     pub token_program: Pubkey,
     /// Whether to close token account when selling, only effective during sell operations
     pub close_token_account_when_sell: Option<bool>,
+    /// Fee recipient for buy/sell account #2. Set from sol-parser-sdk (`tradeEvent.feeRecipient` / 同笔 create_v2+buy 回填的 `observed_fee_recipient`)；热路径不查 RPC。
+    /// `Pubkey::default()` 时按 mayhem 从静态池随机（与 npm 静态池一致，可能落后于主网 Global）。
+    pub fee_recipient: Pubkey,
 }
 
 impl PumpFunParams {
@@ -153,11 +154,14 @@ impl PumpFunParams {
             creator_vault: creator_vault,
             token_program: token_program,
             close_token_account_when_sell: Some(close_token_account_when_sell),
+            fee_recipient: Pubkey::default(),
         }
     }
 
     /// When building from event/parser (e.g. sol-parser-sdk), pass `is_cashback_coin` from the event
     /// so that sell instructions include the correct remaining accounts for cashback.
+    /// `mayhem_mode`: `Some` when known from Create/Trade event (`is_mayhem_mode` / `mayhem_mode`).
+    /// `None` falls back to detecting Mayhem via reserved fee recipient pubkeys only (not AMM protocol fee accounts).
     pub fn from_dev_trade(
         mint: Pubkey,
         token_amount: u64,
@@ -170,8 +174,10 @@ impl PumpFunParams {
         fee_recipient: Pubkey,
         token_program: Pubkey,
         is_cashback_coin: bool,
+        mayhem_mode: Option<bool>,
     ) -> Self {
-        let is_mayhem_mode = fee_recipient == MAYHEM_FEE_RECIPIENT;
+        let is_mayhem_mode =
+            mayhem_mode.unwrap_or_else(|| is_mayhem_fee_recipient(&fee_recipient));
         let bonding_curve_account = BondingCurveAccount::from_dev_trade(
             bonding_curve,
             &mint,
@@ -181,17 +187,32 @@ impl PumpFunParams {
             is_mayhem_mode,
             is_cashback_coin,
         );
+        let creator_vault_resolved = crate::instruction::utils::pumpfun::resolve_creator_vault_for_ix(
+            &bonding_curve_account.creator,
+            creator_vault,
+            &mint,
+        )
+        .or_else(|| {
+            crate::instruction::utils::pumpfun::get_creator_vault_pda(&bonding_curve_account.creator)
+        })
+        .unwrap_or_default();
         Self {
             bonding_curve: Arc::new(bonding_curve_account),
             associated_bonding_curve: associated_bonding_curve,
-            creator_vault: creator_vault,
+            creator_vault: creator_vault_resolved,
             close_token_account_when_sell: close_token_account_when_sell,
             token_program: token_program,
+            fee_recipient,
         }
     }
 
     /// When building from event/parser (e.g. sol-parser-sdk), pass `is_cashback_coin` from the event
     /// so that sell instructions include the correct remaining accounts for cashback.
+    ///
+    /// `mayhem_mode`:
+    /// - **`Some(v)`**（推荐）：显式使用链上事件中的值。gRPC 日志解析对应 Explorer 的 `tradeEvent.mayhemMode`；
+    ///   **不会**再用 `fee_recipient` 覆盖。
+    /// - **`None`**：无该字段时（例如 ShredStream 仅解外层指令、或冷路径），才用 `fee_recipient` 是否落在 Mayhem 静态列表上推断。
     pub fn from_trade(
         bonding_curve: Pubkey,
         associated_bonding_curve: Pubkey,
@@ -206,8 +227,12 @@ impl PumpFunParams {
         fee_recipient: Pubkey,
         token_program: Pubkey,
         is_cashback_coin: bool,
+        mayhem_mode: Option<bool>,
     ) -> Self {
-        let is_mayhem_mode = fee_recipient == MAYHEM_FEE_RECIPIENT;
+        let is_mayhem_mode = match mayhem_mode {
+            Some(v) => v,
+            None => is_mayhem_fee_recipient(&fee_recipient),
+        };
         let bonding_curve = BondingCurveAccount::from_trade(
             bonding_curve,
             mint,
@@ -219,12 +244,22 @@ impl PumpFunParams {
             is_mayhem_mode,
             is_cashback_coin,
         );
+        let creator_vault_resolved = crate::instruction::utils::pumpfun::resolve_creator_vault_for_ix(
+            &bonding_curve.creator,
+            creator_vault,
+            &mint,
+        )
+        .or_else(|| {
+            crate::instruction::utils::pumpfun::get_creator_vault_pda(&bonding_curve.creator)
+        })
+        .unwrap_or_default();
         Self {
             bonding_curve: Arc::new(bonding_curve),
             associated_bonding_curve: associated_bonding_curve,
-            creator_vault: creator_vault,
+            creator_vault: creator_vault_resolved,
             close_token_account_when_sell: close_token_account_when_sell,
             token_program: token_program,
+            fee_recipient,
         }
     }
 
@@ -261,11 +296,11 @@ impl PumpFunParams {
             creator_vault: creator_vault.unwrap(),
             close_token_account_when_sell: None,
             token_program: mint_account.owner,
+            fee_recipient: Pubkey::default(),
         })
     }
 
-    /// Override `creator_vault` with a value from gRPC/event (e.g. for Creator Rewards Sharing).
-    /// Use when selling so the instruction uses the latest on-chain vault and avoids "seeds constraint violated" (2006).
+    /// Updates the cached `creator_vault` field only. Buy/sell ix use [`BondingCurveAccount::creator`].
     #[inline]
     pub fn with_creator_vault(mut self, creator_vault: Pubkey) -> Self {
         self.creator_vault = creator_vault;
@@ -874,14 +909,27 @@ impl MeteoraDammV2Params {
     ) -> Result<Self, anyhow::Error> {
         let pool_data =
             crate::instruction::utils::meteora_damm_v2::fetch_pool(rpc, pool_address).await?;
+        let mint_accounts = rpc
+            .get_multiple_accounts(&[pool_data.token_a_mint, pool_data.token_b_mint])
+            .await?;
+        let token_a_program = mint_accounts
+            .get(0)
+            .and_then(|a| a.as_ref())
+            .map(|a| a.owner)
+            .ok_or_else(|| anyhow::anyhow!("Token A mint account not found"))?;
+        let token_b_program = mint_accounts
+            .get(1)
+            .and_then(|a| a.as_ref())
+            .map(|a| a.owner)
+            .ok_or_else(|| anyhow::anyhow!("Token B mint account not found"))?;
         Ok(Self {
             pool: *pool_address,
             token_a_vault: pool_data.token_a_vault,
             token_b_vault: pool_data.token_b_vault,
             token_a_mint: pool_data.token_a_mint,
             token_b_mint: pool_data.token_b_mint,
-            token_a_program: TOKEN_PROGRAM,
-            token_b_program: TOKEN_PROGRAM,
+            token_a_program,
+            token_b_program,
         })
     }
 }

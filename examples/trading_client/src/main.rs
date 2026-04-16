@@ -10,7 +10,7 @@
 use sol_trade_sdk::{
     common::{AnyResult, InfrastructureConfig, TradeConfig},
     swqos::{SwqosConfig, SwqosRegion},
-    SwqosTransport, TradingClient, TradingInfrastructure,
+    AstralaneTransport, TradingClient, TradingInfrastructure,
 };
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::signature::Keypair;
@@ -52,17 +52,16 @@ async fn create_trading_client_simple() -> AnyResult<TradingClient> {
             "your_api_token".to_string(),
             SwqosRegion::Frankfurt,
             None,
-            Some(SwqosTransport::Quic),
-        ), // QUIC; use None for HTTP
+            Some(AstralaneTransport::Quic),
+        ), // QUIC；None / Some(Binary) / Some(Plain) 为 HTTP
         // Helius Sender: 4th param swqos_only Some(true) => min tip 0.000005 SOL; None => 0.0002 SOL
         SwqosConfig::Helius("".to_string(), SwqosRegion::Default, None, Some(true)),
     ];
 
-    // Optional: Customize WSOL ATA and Seed optimization settings
-    let trade_config = TradeConfig::new(rpc_url, swqos_configs, commitment).with_wsol_ata_config(
-        true, // create_wsol_ata_on_startup: Check and create WSOL ATA on startup
-        true, // use_seed_optimize: Enable seed optimization for all ATA operations
-    );
+    let trade_config = TradeConfig::builder(rpc_url, swqos_configs, commitment)
+        .create_wsol_ata_on_startup(true)
+        .use_seed_optimize(true)
+        .build();
 
     // Creates new infrastructure internally
     let client = TradingClient::new(Arc::new(payer), trade_config).await;

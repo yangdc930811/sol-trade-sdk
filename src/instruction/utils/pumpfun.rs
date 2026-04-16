@@ -1,8 +1,39 @@
 use crate::common::{bonding_curve::BondingCurveAccount, SolanaRpcClient};
 use anyhow::anyhow;
 use rand::seq::IndexedRandom;
-use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
+use solana_sdk::{
+    instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
+};
 use std::sync::Arc;
+
+// --- Aligned with official `@pump-fun/pump-sdk` (npm) ---
+// - `src/fees.ts` `getFeeRecipient(global, mayhemMode)` — fee recipient pools
+// - `src/bondingCurve.ts` `CURRENT_FEE_RECIPIENTS` / `getStaticRandomFeeRecipient`
+// - `src/sdk.ts` `BONDING_CURVE_NEW_SIZE` (151) + `extendAccountInstruction` — **not** called from the
+//   trade hot path here (no RPC in `PumpFunInstructionBuilder`); use these helpers from a cold path if needed.
+
+/// Minimum bonding curve account data length after protocol upgrades (`sdk.ts` `BONDING_CURVE_NEW_SIZE`).
+pub const PUMP_BONDING_CURVE_MIN_DATA_LEN: usize = 151;
+
+/// Anchor discriminator for `extend_account` (`pump.json`); same as `PumpSdk.extendAccountInstruction`.
+pub const EXTEND_ACCOUNT_DISCRIMINATOR: [u8; 8] = [234, 102, 194, 203, 150, 72, 62, 229];
+
+/// Build `extend_account` for bonding curve (cold path / separate tx only — do not add RPC to hot-path builds).
+#[inline]
+pub fn extend_bonding_curve_account_instruction(bonding_curve: &Pubkey, user: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: accounts::PUMPFUN,
+        accounts: vec![
+            AccountMeta::new(*bonding_curve, false),
+            AccountMeta::new(*user, true),
+            crate::constants::SYSTEM_PROGRAM_META,
+            accounts::EVENT_AUTHORITY_META,
+            accounts::PUMPFUN_META,
+        ],
+        data: EXTEND_ACCOUNT_DISCRIMINATOR.to_vec(),
+    }
+}
 
 /// Constants used as seeds for deriving PDAs (Program Derived Addresses)
 pub mod seeds {
@@ -24,6 +55,9 @@ pub mod seeds {
     pub const GLOBAL_VOLUME_ACCUMULATOR_SEED: &[u8] = b"global_volume_accumulator";
 
     pub const FEE_CONFIG_SEED: &[u8] = b"fee_config";
+
+    /// `feeSharingConfig` PDA under pump-fees (`@pump-fun/pump-sdk` `feeSharingConfigPda`)
+    pub const SHARING_CONFIG_SEED: &[u8] = b"sharing-config";
 }
 
 pub mod global_constants {
@@ -172,13 +206,72 @@ pub const BUY_DISCRIMINATOR: [u8; 8] = [102, 6, 61, 18, 1, 218, 235, 234];
 pub const BUY_EXACT_SOL_IN_DISCRIMINATOR: [u8; 8] = [56, 252, 116, 8, 158, 223, 205, 95];
 pub const SELL_DISCRIMINATOR: [u8; 8] = [51, 230, 133, 164, 1, 127, 131, 173];
 
-/// Returns a random Mayhem fee recipient AccountMeta (pump-public-docs: Bonding Curve 2nd account = Mayhem fee recipient; use any one randomly).
+/// Check if a pubkey is one of the Mayhem fee recipients
+#[inline]
+pub fn is_mayhem_fee_recipient(pubkey: &Pubkey) -> bool {
+    global_constants::MAYHEM_FEE_RECIPIENTS.iter().any(|p| p == pubkey)
+}
+
+/// Check if a pubkey is a Pump.fun AMM protocol fee recipient (PUMPFUN_AMM_FEE_1..7)
+#[inline]
+pub fn is_amm_fee_recipient(pubkey: &Pubkey) -> bool {
+    pubkey == &global_constants::PUMPFUN_AMM_FEE_1
+        || pubkey == &global_constants::PUMPFUN_AMM_FEE_2
+        || pubkey == &global_constants::PUMPFUN_AMM_FEE_3
+        || pubkey == &global_constants::PUMPFUN_AMM_FEE_4
+        || pubkey == &global_constants::PUMPFUN_AMM_FEE_5
+        || pubkey == &global_constants::PUMPFUN_AMM_FEE_6
+        || pubkey == &global_constants::PUMPFUN_AMM_FEE_7
+}
+
+/// Mayhem: random among `Global.reservedFeeRecipient` + `Global.reservedFeeRecipients` (`fees.ts` `getFeeRecipient` when `mayhemMode === true`).
+/// Uses hardcoded `MAYHEM_FEE_RECIPIENTS`; prefer gRPC/event `PumpFunParams.fee_recipient` when set.
 #[inline]
 pub fn get_mayhem_fee_recipient_meta_random() -> AccountMeta {
     let recipient = *global_constants::MAYHEM_FEE_RECIPIENTS
         .choose(&mut rand::rng())
         .unwrap_or(&global_constants::MAYHEM_FEE_RECIPIENTS[0]);
     AccountMeta { pubkey: recipient, is_signer: false, is_writable: true }
+}
+
+/// Non-mayhem: random among `Global::fee_recipient` + `Global::fee_recipients[0..7]`.
+/// Same pubkey set as `bondingCurve.ts` `CURRENT_FEE_RECIPIENTS` / `getStaticRandomFeeRecipient` and `fees.ts` `getFeeRecipient` when `mayhemMode === false`.
+#[inline]
+pub fn get_standard_fee_recipient_meta_random() -> AccountMeta {
+    const POOL: &[Pubkey] = &[
+        global_constants::FEE_RECIPIENT,
+        global_constants::PUMPFUN_AMM_FEE_1,
+        global_constants::PUMPFUN_AMM_FEE_2,
+        global_constants::PUMPFUN_AMM_FEE_3,
+        global_constants::PUMPFUN_AMM_FEE_4,
+        global_constants::PUMPFUN_AMM_FEE_5,
+        global_constants::PUMPFUN_AMM_FEE_6,
+        global_constants::PUMPFUN_AMM_FEE_7,
+    ];
+    let recipient = *POOL
+        .choose(&mut rand::rng())
+        .unwrap_or(&global_constants::FEE_RECIPIENT);
+    AccountMeta {
+        pubkey: recipient,
+        is_signer: false,
+        is_writable: true,
+    }
+}
+
+/// 账户 #2 fee recipient：优先使用 gRPC/ShredStream 解析值（同笔 create_v2+buy 的 `observed_fee_recipient` 或 `tradeEvent.feeRecipient`）；未提供时按 mayhem 从静态池随机。
+#[inline]
+pub fn pump_fun_fee_recipient_meta(from_stream: Pubkey, is_mayhem_mode: bool) -> AccountMeta {
+    if from_stream != Pubkey::default() {
+        AccountMeta {
+            pubkey: from_stream,
+            is_signer: false,
+            is_writable: true,
+        }
+    } else if is_mayhem_mode {
+        get_mayhem_fee_recipient_meta_random()
+    } else {
+        get_standard_fee_recipient_meta_random()
+    }
 }
 
 pub struct Symbol;
@@ -240,6 +333,76 @@ pub fn get_creator_vault_pda(creator: &Pubkey) -> Option<Pubkey> {
             pda.map(|pubkey| pubkey.0)
         },
     )
+}
+
+/// `feeSharingConfig` PDA per mint (`pump-sdk` `feeSharingConfigPda` → `pump-fees` program).
+#[inline]
+pub fn get_fee_sharing_config_pda(mint: &Pubkey) -> Option<Pubkey> {
+    Pubkey::try_find_program_address(
+        &[seeds::SHARING_CONFIG_SEED, mint.as_ref()],
+        &accounts::FEE_PROGRAM,
+    )
+    .map(|(p, _)| p)
+}
+
+/// PDA of `["creator-vault", Pubkey::default()]`. Never use as a real vault — it is only produced when
+/// `creator` was missing and code incorrectly derived a vault; on-chain this fails with Anchor 2006.
+#[inline]
+pub fn phantom_default_creator_vault() -> Pubkey {
+    solana_sdk::pubkey!("2DR3iqRPVThyRLVJnwjPW1qiGWrp8RUFfHVjMbZyhdNc")
+}
+
+#[inline]
+pub fn is_phantom_default_creator_vault(pk: &Pubkey) -> bool {
+    *pk == phantom_default_creator_vault()
+}
+
+/// Resolve `creator_vault` for Pump buy/sell account #10.
+///
+/// - If `creator` is **missing** in the outer trade-event borsh (`Pubkey::default()`) but
+///   `creator_vault` was filled from **instruction accounts** (e.g. `fill_trade_accounts` index 9),
+///   **trust that vault** — unless it equals [`phantom_default_creator_vault`] (bad derivation / cache).
+/// - If event `creator_vault` is **missing** → [`get_creator_vault_pda`]`(creator)` (never `PDA(default)`).
+/// - If it **matches** `PDA(creator)` or `PDA(fee_sharing_config(mint))` → use it (fast path, matches ix).
+/// - If it **does not match** either (e.g. stale vault but `creator` from tradeEvent is correct) → use
+///   [`get_creator_vault_pda`]`(creator)` so seeds match on-chain bonding curve (fixes 2006 Left≠Right).
+#[inline]
+pub fn resolve_creator_vault_for_ix(
+    creator: &Pubkey,
+    creator_vault_from_event: Pubkey,
+    mint: &Pubkey,
+) -> Option<Pubkey> {
+    let phantom = phantom_default_creator_vault();
+
+    if *creator == Pubkey::default() {
+        if creator_vault_from_event == Pubkey::default() {
+            return None;
+        }
+        if creator_vault_from_event == phantom {
+            return None;
+        }
+        return Some(creator_vault_from_event);
+    }
+
+    // Real creator: poisoned cache may hold phantom vault — always remap to PDA(creator).
+    if creator_vault_from_event == phantom {
+        return get_creator_vault_pda(creator);
+    }
+
+    let v_derived = get_creator_vault_pda(creator)?;
+    if creator_vault_from_event == Pubkey::default() {
+        return Some(v_derived);
+    }
+    if creator_vault_from_event == v_derived {
+        return Some(creator_vault_from_event);
+    }
+    if let Some(sharing) = get_fee_sharing_config_pda(mint) {
+        let v_sharing = get_creator_vault_pda(&sharing)?;
+        if creator_vault_from_event == v_sharing {
+            return Some(creator_vault_from_event);
+        }
+    }
+    Some(v_derived)
 }
 
 #[inline]
@@ -321,5 +484,56 @@ mod tests {
         let a = get_creator_vault_pda(&creator).unwrap();
         let b = get_creator_vault_pda(&creator).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fee_sharing_config_pda_deterministic() {
+        let mint = Pubkey::new_unique();
+        let a = get_fee_sharing_config_pda(&mint).unwrap();
+        let b = get_fee_sharing_config_pda(&mint).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn default_creator_yields_fixed_creator_vault() {
+        let v = get_creator_vault_pda(&Pubkey::default()).unwrap();
+        assert_eq!(v, phantom_default_creator_vault(), "phantom vault constant must match PDA(default creator)");
+    }
+
+    #[test]
+    fn resolve_uses_ix_vault_when_creator_borsh_is_default() {
+        let mint = Pubkey::new_unique();
+        let ix_vault = Pubkey::new_unique();
+        let resolved = resolve_creator_vault_for_ix(&Pubkey::default(), ix_vault, &mint);
+        assert_eq!(resolved, Some(ix_vault));
+    }
+
+    #[test]
+    fn resolve_returns_none_when_creator_and_vault_missing() {
+        let mint = Pubkey::new_unique();
+        assert_eq!(
+            resolve_creator_vault_for_ix(&Pubkey::default(), Pubkey::default(), &mint),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_phantom_vault_when_creator_borsh_is_default() {
+        let mint = Pubkey::new_unique();
+        assert_eq!(
+            resolve_creator_vault_for_ix(&Pubkey::default(), phantom_default_creator_vault(), &mint),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_remaps_phantom_vault_when_creator_known() {
+        let creator = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let expected = get_creator_vault_pda(&creator).unwrap();
+        assert_eq!(
+            resolve_creator_vault_for_ix(&creator, phantom_default_creator_vault(), &mint),
+            Some(expected)
+        );
     }
 }

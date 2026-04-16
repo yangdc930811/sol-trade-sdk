@@ -8,8 +8,9 @@ use crate::{
 };
 use crate::{
     instruction::utils::pumpfun::{
-        accounts, get_bonding_curve_pda, get_bonding_curve_v2_pda, get_creator,
-        get_mayhem_fee_recipient_meta_random, get_user_volume_accumulator_pda,
+        accounts, get_bonding_curve_pda, get_bonding_curve_v2_pda,
+        get_user_volume_accumulator_pda, pump_fun_fee_recipient_meta,
+        resolve_creator_vault_for_ix,
         global_constants::{self},
         BUY_DISCRIMINATOR, BUY_EXACT_SOL_IN_DISCRIMINATOR, SELL_DISCRIMINATOR,
     },
@@ -42,8 +43,20 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
         }
 
         let bonding_curve = &protocol_params.bonding_curve;
-        let creator_vault_pda = protocol_params.creator_vault;
-        let creator = get_creator(&creator_vault_pda);
+        // creator_vault must be PDA(creator) per bonding curve. Event vault: use only if == derived;
+        // if stream sends a mismatched vault (wrong token / stale), fall back to derived.
+        let creator = bonding_curve.creator;
+        let creator_vault_pda = resolve_creator_vault_for_ix(
+            &creator,
+            protocol_params.creator_vault,
+            &params.output_mint,
+        )
+        .ok_or_else(|| {
+            anyhow!(
+                "creator_vault PDA derivation failed (creator={})",
+                creator
+            )
+        })?;
 
         // ========================================
         // Trade calculation and account address preparation
@@ -64,13 +77,11 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
             params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
         );
 
-        let bonding_curve_addr = if bonding_curve.account == Pubkey::default() {
-            get_bonding_curve_pda(&params.output_mint).ok_or_else(|| {
-                anyhow!("bonding_curve PDA derivation failed for mint {}", params.output_mint)
-            })?
-        } else {
-            bonding_curve.account
-        };
+        // 始终用 mint 推导 canonical bonding curve PDA。缓存里的 `bonding_curve.account` 可能指向其它池子，
+        // 会导致链上读到错误 `creator`，从而 creator_vault seeds 与传入的 vault 不一致（Anchor 2006）。
+        let bonding_curve_addr = get_bonding_curve_pda(&params.output_mint).ok_or_else(|| {
+            anyhow!("bonding_curve PDA derivation failed for mint {}", params.output_mint)
+        })?;
 
         // Determine token program based on mayhem mode
         let is_mayhem_mode = bonding_curve.is_mayhem_mode;
@@ -82,15 +93,11 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
         };
 
         let associated_bonding_curve =
-            if protocol_params.associated_bonding_curve == Pubkey::default() {
-                crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
-                    &bonding_curve_addr,
-                    &params.output_mint,
-                    &token_program,
-                )
-            } else {
-                protocol_params.associated_bonding_curve
-            };
+            crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
+                &bonding_curve_addr,
+                &params.output_mint,
+                &token_program,
+            );
 
         let user_token_account =
             crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
@@ -106,6 +113,8 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
         // ========================================
         // Build instructions
         // ========================================
+        // Hot path: no RPC here (latency). For legacy curves &lt;151 bytes, use
+        // `extend_bonding_curve_account_instruction` from a cold path or separate tx.
         let mut instructions = Vec::with_capacity(2);
 
         // Create associated token account
@@ -142,12 +151,9 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
             buy_data[24..26].copy_from_slice(&track_volume);
         }
 
-        // Determine fee recipient based on mayhem mode (pump-public-docs: 2nd account = Mayhem fee recipient; use any one randomly)
-        let fee_recipient_meta = if is_mayhem_mode {
-            get_mayhem_fee_recipient_meta_random()
-        } else {
-            global_constants::FEE_RECIPIENT_META
-        };
+        // Fee recipient: gRPC/ShredStream 填入的 `PumpFunParams.fee_recipient`（同笔 create_v2+buy 或 trade 日志）优先；热路径无 RPC。
+        let fee_recipient_meta =
+            pump_fun_fee_recipient_meta(protocol_params.fee_recipient, is_mayhem_mode);
 
         let bonding_curve_v2 = get_bonding_curve_v2_pda(&params.output_mint).ok_or_else(|| {
             anyhow!("bonding_curve_v2 PDA derivation failed for mint {}", params.output_mint)
@@ -197,8 +203,18 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
         };
 
         let bonding_curve = &protocol_params.bonding_curve;
-        let creator_vault_pda = protocol_params.creator_vault;
-        let creator = get_creator(&creator_vault_pda);
+        let creator = bonding_curve.creator;
+        let creator_vault_pda = resolve_creator_vault_for_ix(
+            &creator,
+            protocol_params.creator_vault,
+            &params.input_mint,
+        )
+        .ok_or_else(|| {
+            anyhow!(
+                "creator_vault PDA derivation failed (creator={})",
+                creator
+            )
+        })?;
 
         // ========================================
         // Trade calculation and account address preparation
@@ -218,13 +234,9 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
             ),
         };
 
-        let bonding_curve_addr = if bonding_curve.account == Pubkey::default() {
-            get_bonding_curve_pda(&params.input_mint).ok_or_else(|| {
-                anyhow!("bonding_curve PDA derivation failed for mint {}", params.input_mint)
-            })?
-        } else {
-            bonding_curve.account
-        };
+        let bonding_curve_addr = get_bonding_curve_pda(&params.input_mint).ok_or_else(|| {
+            anyhow!("bonding_curve PDA derivation failed for mint {}", params.input_mint)
+        })?;
 
         // Determine token program based on mayhem mode
         let is_mayhem_mode = bonding_curve.is_mayhem_mode;
@@ -236,15 +248,11 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
         };
 
         let associated_bonding_curve =
-            if protocol_params.associated_bonding_curve == Pubkey::default() {
-                crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
-                    &bonding_curve_addr,
-                    &params.input_mint,
-                    &token_program,
-                )
-            } else {
-                protocol_params.associated_bonding_curve
-            };
+            crate::common::fast_fn::get_associated_token_address_with_program_id_fast(
+                &bonding_curve_addr,
+                &params.input_mint,
+                &token_program,
+            );
 
         let user_token_account =
             crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
@@ -264,12 +272,8 @@ impl InstructionBuilder for PumpFunInstructionBuilder {
         sell_data[8..16].copy_from_slice(&token_amount.to_le_bytes());
         sell_data[16..24].copy_from_slice(&min_sol_output.to_le_bytes());
 
-        // Determine fee recipient based on mayhem mode (pump-public-docs: 2nd account = Mayhem fee recipient; use any one randomly)
-        let fee_recipient_meta = if is_mayhem_mode {
-            get_mayhem_fee_recipient_meta_random()
-        } else {
-            global_constants::FEE_RECIPIENT_META
-        };
+        let fee_recipient_meta =
+            pump_fun_fee_recipient_meta(protocol_params.fee_recipient, is_mayhem_mode);
 
         let mut accounts: Vec<AccountMeta> = vec![
             global_constants::GLOBAL_ACCOUNT_META,

@@ -1,9 +1,10 @@
 use anyhow::Result;
 use solana_hash::Hash;
 use solana_sdk::{
-    instruction::Instruction, message::AddressLookupTableAccount, pubkey::Pubkey,
+    instruction::Instruction, pubkey::Pubkey,
     signature::Keypair, signature::Signature,
 };
+use solana_message::AddressLookupTableAccount;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -25,6 +26,7 @@ use crate::{
     trading::MiddlewareManager,
 };
 use once_cell::sync::Lazy;
+use crate::swqos::{ SwqosType};
 
 /// Global syscall bypass manager (reserved for future time/IO optimizations).
 /// 全局系统调用绕过管理器（预留，后续可接入时间/IO 等优化）。
@@ -55,7 +57,7 @@ impl TradeExecutor for GenericTradeExecutor {
     async fn swap(
         &self,
         params: SwapParams,
-    ) -> Result<(bool, Vec<Signature>, Option<anyhow::Error>)> {
+    ) -> Result<(bool, Vec<Signature>, Option<anyhow::Error>, Vec<(SwqosType, i64)>)> {
         // Sample total start only when logging or simulate. 仅在有日志或 simulate 时取起点。
         let total_start = (params.log_enabled || params.simulate).then(Instant::now);
         let timing_start_us: Option<i64> = if params.log_enabled {
@@ -215,7 +217,9 @@ impl TradeExecutor for GenericTradeExecutor {
             } else {
                 (ok, signatures, err)
             };
-            Ok(confirm_result)
+
+            //就是把confirm_result 拆开 再加上 submit_timings
+            Ok((confirm_result.0, confirm_result.1, confirm_result.2, submit_timings))
         } else {
             // Not waiting for confirmation: confirmed is not measured (-); total is per-channel submit time only.
             if log_enabled {
@@ -229,7 +233,11 @@ impl TradeExecutor for GenericTradeExecutor {
                     None,
                 );
             }
-            Ok((ok, signatures, err))
+
+
+
+            Ok((ok, signatures, err, submit_timings))
+
         };
 
         result
@@ -254,7 +262,7 @@ async fn simulate_transaction(
     is_buy: bool,
     with_tip: bool,
     gas_fee_strategy: GasFeeStrategy,
-) -> Result<(bool, Vec<Signature>, Option<anyhow::Error>)> {
+) -> Result<(bool, Vec<Signature>, Option<anyhow::Error>, Vec<(SwqosType, i64)>)> {
     use crate::trading::common::build_transaction;
     use solana_client::rpc_config::RpcSimulateTransactionConfig;
     use solana_commitment_config::CommitmentLevel;
@@ -330,7 +338,7 @@ async fn simulate_transaction(
                 trace!(target: "sol_trade_sdk", "Compute Units Consumed: {}", units_consumed);
             }
         }
-        return Ok((false, vec![signature], Some(anyhow::anyhow!("{:?}", err))));
+        return Ok((false, vec![signature], Some(anyhow::anyhow!("{:?}", err)), Vec::new()));
     }
 
     // Simulation succeeded
@@ -345,7 +353,7 @@ async fn simulate_transaction(
         }
     }
 
-    Ok((true, vec![signature], None))
+    Ok((true, vec![signature], None, Vec::new()))
 }
 
 #[cfg(test)]

@@ -20,8 +20,8 @@ use crate::swqos::common::TradeError;
 use crate::swqos::SwqosClient;
 use crate::swqos::SwqosConfig;
 use crate::swqos::TradeType;
-// Re-export for SWQOS HTTP/QUIC choice in SwqosConfig (e.g. Astralane)
-pub use crate::swqos::SwqosTransport;
+// Re-export for SwqosConfig (Node1/BlockRazor transport; Astralane submission mode)
+pub use crate::swqos::{AstralaneTransport, SwqosTransport};
 use crate::trading::core::params::BonkParams;
 use crate::trading::core::params::DexParamEnum;
 use crate::trading::core::params::MeteoraDammV2Params;
@@ -166,6 +166,7 @@ impl TradingInfrastructure {
                     config.rpc_url.clone(),
                     config.commitment.clone(),
                     swqos.clone(),
+                    config.mev_protection,
                 ),
             )
             .await
@@ -771,7 +772,7 @@ impl TradingClient {
     pub async fn buy(
         &self,
         params: TradeBuyParams,
-    ) -> Result<(bool, Vec<Signature>, Option<TradeError>), anyhow::Error> {
+    ) -> Result<(bool, Vec<Signature>, Option<TradeError>, Vec<(crate::swqos::SwqosType, i64)>), anyhow::Error> {
         if params.recent_blockhash.is_none() && params.durable_nonce.is_none() {
             return Err(anyhow::anyhow!(
                 "Must provide either recent_blockhash or durable_nonce for buy (required for transaction validity)"
@@ -845,8 +846,8 @@ impl TradingClient {
 
         let swap_result = executor.swap(buy_params).await;
         let result =
-            swap_result.map(|(success, sigs, err)| (success, sigs, err.map(TradeError::from)));
-        return result;
+            swap_result.map(|(success, sigs, err, timings)| (success, sigs, err.map(TradeError::from), timings));
+        result
     }
 
     /// Execute a sell order for a specified token
@@ -878,7 +879,7 @@ impl TradingClient {
     pub async fn sell(
         &self,
         params: TradeSellParams,
-    ) -> Result<(bool, Vec<Signature>, Option<TradeError>), anyhow::Error> {
+    ) -> Result<(bool, Vec<Signature>, Option<TradeError>, Vec<(crate::swqos::SwqosType, i64)>), anyhow::Error> {
         #[cfg(feature = "perf-trace")]
         if sdk_log::sdk_log_enabled() && params.slippage_basis_points.is_none() {
             debug!(
@@ -952,8 +953,8 @@ impl TradingClient {
 
         let swap_result = executor.swap(sell_params).await;
         let result =
-            swap_result.map(|(success, sigs, err)| (success, sigs, err.map(TradeError::from)));
-        return result;
+            swap_result.map(|(success, sigs, err, timings)| (success, sigs, err.map(TradeError::from), timings));
+        result
     }
 
     #[inline]
@@ -1158,7 +1159,7 @@ impl TradingClient {
         mut params: TradeSellParams,
         amount_token: u64,
         percent: u64,
-    ) -> Result<(bool, Vec<Signature>, Option<TradeError>), anyhow::Error> {
+    ) -> Result<(bool, Vec<Signature>, Option<TradeError>, Vec<(crate::swqos::SwqosType, i64)>), anyhow::Error> {
         if percent == 0 || percent > 100 {
             return Err(anyhow::anyhow!("Percentage must be between 1 and 100"));
         }

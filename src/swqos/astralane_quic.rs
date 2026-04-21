@@ -247,7 +247,7 @@ impl AstralaneQuicClient {
             .context("Failed to write transaction data")?;
 
         send_stream.finish().context("Failed to finish stream")?;
-        info!("[astralane-quic] Transaction sent ({} bytes)", transaction_bytes.len());
+        // info!("[astralane-quic] Transaction sent ({} bytes)", transaction_bytes.len());
 
         Ok(())
     }

@@ -9,6 +9,7 @@ use crate::instruction::{
 use super::core::{executor::GenericTradeExecutor, params::SwapParams, traits::TradeExecutor};
 use anyhow::anyhow;
 use solana_sdk::signature::Signature;
+use crate::swqos::SwqosType;
 
 /// 支持的交易协议
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +134,7 @@ impl TradeExecutor for UnsupportedTradeExecutor {
     async fn swap(
         &self,
         _params: SwapParams,
-    ) -> anyhow::Result<(bool, Vec<Signature>, Option<anyhow::Error>)> {
+    ) -> anyhow::Result<(bool, Vec<Signature>, Option<anyhow::Error>, Vec<(SwqosType, i64)>)> {
         Err(anyhow!("{} is not supported by the current SDK executor", self.0))
     }
 

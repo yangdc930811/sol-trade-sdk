@@ -3,6 +3,7 @@ use solana_sdk::{account::Account, clock::Clock};
 use std::collections::HashMap;
 use anyhow::{ensure, Context};
 use anyhow::Result;
+use smallvec::SmallVec;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use sol_common::common::constants::METEORA_DLMM_PROGRAM_ID;
@@ -291,7 +292,7 @@ pub fn get_bin_array_pubkeys_for_swap(
     bitmap_extension: Option<&BinArrayBitmapExtension>,
     swap_for_y: bool,
     take_count: u8,
-) -> Result<Vec<Pubkey>> {
+) -> Result<SmallVec<[Pubkey; 3]>> {
     let mut start_bin_array_idx = BinArray::bin_id_to_bin_array_index(lb_pair.active_id)?;
     let mut bin_array_idx = vec![];
     let increment = if swap_for_y { -1 } else { 1 };
@@ -337,7 +338,7 @@ pub fn get_bin_array_pubkeys_for_swap(
     let bin_array_pubkeys = bin_array_idx
         .into_iter()
         .filter_map(|idx| derive_bin_array_pda_from_cache(&lb_pair_pubkey, idx.into()))
-        .collect();
+        .collect::<SmallVec<[Pubkey; 3]>>();
 
     Ok(bin_array_pubkeys)
 }
@@ -345,14 +346,17 @@ pub fn get_bin_array_pubkeys_for_swap(
 pub async fn fetch_quote_required_accounts(
     rpc_client: &RpcClient,
     lb_pair_state: &LbPair,
-    bin_arrays_for_swap: Vec<Pubkey>,
+    bin_arrays_for_swap: &[Pubkey],
 ) -> Result<SwapQuoteAccounts> {
     let prerequisite_accounts = [
         lb_pair_state.token_x_mint,
         lb_pair_state.token_y_mint,
     ];
 
-    let accounts_to_fetch = [prerequisite_accounts.to_vec(), bin_arrays_for_swap.clone()].concat();
+    let mut accounts_to_fetch =
+        Vec::with_capacity(prerequisite_accounts.len() + bin_arrays_for_swap.len());
+    accounts_to_fetch.extend_from_slice(&prerequisite_accounts);
+    accounts_to_fetch.extend_from_slice(bin_arrays_for_swap);
 
     let accounts = rpc_client.get_multiple_accounts(&accounts_to_fetch).await?;
 
@@ -370,14 +374,13 @@ pub async fn fetch_quote_required_accounts(
 
     let bin_array_accounts = accounts
         .get(prerequisite_accounts.len()..)
-        .context("Failed to fetch bin array accounts")?
-        .to_vec();
+        .context("Failed to fetch bin array accounts")?;
 
     let valid_bin_array_accounts = bin_array_accounts
-        .into_iter()
+        .iter()
         .zip(bin_arrays_for_swap.iter())
         .filter_map(|(account, &key)| {
-            let account = account?;
+            let account = account.as_ref()?;
             Some((
                 key,
                 borsh::from_slice::<BinArray>(&account.data[8..]).ok()?,  // 跳过前面8个字节

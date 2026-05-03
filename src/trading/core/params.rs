@@ -337,6 +337,7 @@ pub struct PumpSwapParams {
     pub lp_fee: u64,
     pub protocol_fee: u64,
     pub coin_creator_fee: u64,
+    pub cashback_fee: u64,
     /// Coin creator vault ATA
     pub coin_creator_vault_ata: Pubkey,
     /// Coin creator vault authority
@@ -379,6 +380,7 @@ impl PumpSwapParams {
             lp_fee: 0,
             protocol_fee: 0,
             coin_creator_fee: 0,
+            cashback_fee: 0,
             coin_creator_vault_ata,
             coin_creator_vault_authority,
             base_token_program,
@@ -494,6 +496,7 @@ impl PumpSwapParams {
             lp_fee: 0,
             protocol_fee: 0,
             coin_creator_fee: 0,
+            cashback_fee: 0,
             coin_creator_vault_ata: coin_creator_vault_ata.unwrap(),
             coin_creator_vault_authority: coin_creator_vault_authority.unwrap(),
             pool_base_token_reserves,

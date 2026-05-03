@@ -128,13 +128,14 @@ pub fn buy_quote_input_internal(
     lp_fee: u64,
     protocol_fee: u64,
     coin_creator_fee: u64,
+    cashback_fee: u64,
 ) -> Result<BuyQuoteInputResult, String> {
     if base_reserve == 0 || quote_reserve == 0 {
         return Err("Invalid input: 'baseReserve' or 'quoteReserve' cannot be zero.".to_string());
     }
 
     // Calculate total fee basis points
-    let total_fee_bps = lp_fee + protocol_fee + coin_creator_fee;
+    let total_fee_bps = lp_fee + protocol_fee + coin_creator_fee + cashback_fee;
     let denominator = 10_000 + total_fee_bps;
 
     // Calculate effective quote amount after fees
@@ -179,6 +180,7 @@ pub fn sell_base_input_internal(
     lp_fee: u64,
     protocol_fee: u64,
     coin_creator_fee: u64,
+    cashback_fee: u64,
 ) -> Result<SellBaseInputResult, String> {
     if base_reserve == 0 || quote_reserve == 0 {
         return Err("Invalid input: 'baseReserve' or 'quoteReserve' cannot be zero.".to_string());
@@ -199,7 +201,7 @@ pub fn sell_base_input_internal(
     };
 
     // Calculate final quote after fees
-    let total_fees = lp_fee + protocol_fee + coin_creator_fee;
+    let total_fees = lp_fee + protocol_fee + coin_creator_fee + cashback_fee;
     if total_fees > quote_amount_out {
         return Err("Fees exceed total output; final quote is negative.".to_string());
     }

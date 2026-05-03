@@ -86,6 +86,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 protocol_params.lp_fee,
                 protocol_params.protocol_fee,
                 protocol_params.coin_creator_fee,
+                protocol_params.cashback_fee,
             )
                 .unwrap();
             // base_amount_out, max_quote_amount_in
@@ -99,6 +100,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 protocol_params.lp_fee,
                 protocol_params.protocol_fee,
                 protocol_params.coin_creator_fee,
+                protocol_params.cashback_fee,
             )
                 .unwrap();
             // min_quote_amount_out, base_amount_in
@@ -313,6 +315,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 protocol_params.lp_fee,
                 protocol_params.protocol_fee,
                 protocol_params.coin_creator_fee,
+                protocol_params.cashback_fee,
             )
                 .unwrap();
             // base_amount_in, min_quote_amount_out
@@ -326,6 +329,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 protocol_params.lp_fee,
                 protocol_params.protocol_fee,
                 protocol_params.coin_creator_fee,
+                protocol_params.cashback_fee,
             )
                 .unwrap();
             // max_quote_amount_in, base_amount_out

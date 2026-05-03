@@ -199,6 +199,11 @@ pub fn sell_base_input_internal(
     } else {
         compute_fee(quote_amount_out as u128, coin_creator_fee as u128) as u64
     };
+    let cashback_fee = if cashback_fee == 0 {
+        0
+    } else {
+        compute_fee(quote_amount_out as u128, cashback_fee as u128) as u64
+    };
 
     // Calculate final quote after fees
     let total_fees = lp_fee + protocol_fee + coin_creator_fee + cashback_fee;

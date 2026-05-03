@@ -5,7 +5,7 @@ use crate::{
         params::{RaydiumAmmV4Params, SwapParams},
         traits::InstructionBuilder,
     },
-    utils::calc::raydium_amm_v4::compute_swap_amount,
+    utils::calc::raydium_amm_v4::compute_swap_amount_with_fees,
 };
 use anyhow::{anyhow, Result};
 use solana_sdk::{
@@ -47,11 +47,15 @@ impl InstructionBuilder for RaydiumAmmV4InstructionBuilder {
         let is_base_in = protocol_params.coin_mint == crate::constants::WSOL_TOKEN_ACCOUNT
             || protocol_params.coin_mint == crate::constants::USDC_TOKEN_ACCOUNT;
         let amount_in: u64 = params.input_amount.unwrap_or(0);
-        let swap_result = compute_swap_amount(
+        let swap_result = compute_swap_amount_with_fees(
             protocol_params.coin_reserve,
             protocol_params.pc_reserve,
+            protocol_params.coin_need_take_pnl,
+            protocol_params.pc_need_take_pnl,
             is_base_in,
             amount_in,
+            protocol_params.swap_fee_numerator,
+            protocol_params.swap_fee_denominator,
             params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
         );
         let minimum_amount_out = match params.fixed_output_amount {
@@ -169,11 +173,15 @@ impl InstructionBuilder for RaydiumAmmV4InstructionBuilder {
         // ========================================
         let is_base_in = protocol_params.pc_mint == crate::constants::WSOL_TOKEN_ACCOUNT
             || protocol_params.pc_mint == crate::constants::USDC_TOKEN_ACCOUNT;
-        let swap_result = compute_swap_amount(
+        let swap_result = compute_swap_amount_with_fees(
             protocol_params.coin_reserve,
             protocol_params.pc_reserve,
+            protocol_params.coin_need_take_pnl,
+            protocol_params.pc_need_take_pnl,
             is_base_in,
             params.input_amount.unwrap_or(0),
+            protocol_params.swap_fee_numerator,
+            protocol_params.swap_fee_denominator,
             params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
         );
         let minimum_amount_out = match params.fixed_output_amount {

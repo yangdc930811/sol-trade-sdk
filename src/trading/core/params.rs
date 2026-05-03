@@ -811,6 +811,14 @@ pub struct RaydiumAmmV4Params {
     pub coin_reserve: u64,
     /// Current pc reserve amount in the pool
     pub pc_reserve: u64,
+    /// Pending coin PnL that must be excluded from the no-orderbook reserve
+    pub coin_need_take_pnl: u64,
+    /// Pending pc PnL that must be excluded from the no-orderbook reserve
+    pub pc_need_take_pnl: u64,
+    /// AMM swap fee numerator
+    pub swap_fee_numerator: u64,
+    /// AMM swap fee denominator
+    pub swap_fee_denominator: u64,
 }
 
 impl RaydiumAmmV4Params {
@@ -823,7 +831,21 @@ impl RaydiumAmmV4Params {
         coin_reserve: u64,
         pc_reserve: u64,
     ) -> Self {
-        Self { amm, coin_mint, pc_mint, token_coin, token_pc, coin_reserve, pc_reserve }
+        Self {
+            amm,
+            coin_mint,
+            pc_mint,
+            token_coin,
+            token_pc,
+            coin_reserve,
+            pc_reserve,
+            coin_need_take_pnl: 0,
+            pc_need_take_pnl: 0,
+            swap_fee_numerator:
+                crate::instruction::utils::raydium_amm_v4::accounts::SWAP_FEE_NUMERATOR,
+            swap_fee_denominator:
+                crate::instruction::utils::raydium_amm_v4::accounts::SWAP_FEE_DENOMINATOR,
+        }
     }
     pub async fn from_amm_address_by_rpc(
         rpc: &SolanaRpcClient,
@@ -840,6 +862,10 @@ impl RaydiumAmmV4Params {
             token_pc: amm_info.token_pc,
             coin_reserve,
             pc_reserve,
+            coin_need_take_pnl: amm_info.out_put.need_take_pnl_coin,
+            pc_need_take_pnl: amm_info.out_put.need_take_pnl_pc,
+            swap_fee_numerator: amm_info.fees.swap_fee_numerator,
+            swap_fee_denominator: amm_info.fees.swap_fee_denominator,
         })
     }
 }

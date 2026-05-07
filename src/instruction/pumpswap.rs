@@ -21,6 +21,7 @@ use solana_sdk::{
     pubkey::Pubkey,
     signer::Signer,
 };
+use crate::instruction::utils::pumpfun::global_constants::PROTOCOL_EXTRA_FEE_RECIPIENTS;
 
 /// Instruction builder for PumpSwap protocol
 pub struct PumpSwapInstructionBuilder;
@@ -159,7 +160,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             accounts.push(AccountMeta::new_readonly(pool_v2, false));
         }
         // Trailing accounts: GlobalConfig.buyback_fee_recipients 中任 pubkey + quote ATA（与 pump-swap-sdk 静态池对齐；轮换时需查链上）。
-        let protocol_extra = get_protocol_extra_fee_recipient_random();
+        let protocol_extra = PROTOCOL_EXTRA_FEE_RECIPIENTS[0];
         accounts.push(AccountMeta::new_readonly(protocol_extra, false));
         accounts.push(AccountMeta::new(
             crate::instruction::utils::pumpswap::fee_recipient_ata(protocol_extra, quote_mint),
@@ -315,7 +316,7 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             })?;
             accounts.push(AccountMeta::new_readonly(pool_v2, false));
         }
-        let protocol_extra = get_protocol_extra_fee_recipient_random();
+        let protocol_extra = PROTOCOL_EXTRA_FEE_RECIPIENTS[0];
         accounts.push(AccountMeta::new_readonly(protocol_extra, false));
         accounts.push(AccountMeta::new(
             crate::instruction::utils::pumpswap::fee_recipient_ata(protocol_extra, quote_mint),

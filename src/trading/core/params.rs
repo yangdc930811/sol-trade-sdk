@@ -349,11 +349,6 @@ pub struct PumpSwapParams {
     pub coin_creator: Pubkey,
     /// Whether the pool's coin has cashback enabled
     pub is_cashback_coin: bool,
-    /// Cashback fee in basis points (from trade events / sol-parser-sdk). For quote-in buy and base-in sell
-    /// math, this is summed with [`COIN_CREATOR_FEE_BASIS_POINTS`](crate::instruction::utils::pumpswap::accounts::COIN_CREATOR_FEE_BASIS_POINTS)
-    /// when a creator vault applies — matching on-chain treating creator + cashback as one fee bucket.
-    /// Use `0` when unknown (e.g. RPC-only pool decode has no per-mint cashback bps).
-    pub cashback_fee_basis_points: u64,
     pub min_output_amount: u64,
     pub quote_is_wsol_or_usdc: bool,
 }
@@ -374,7 +369,6 @@ impl PumpSwapParams {
         fee_recipient: Pubkey,
         coin_creator: Pubkey,
         is_cashback_coin: bool,
-        cashback_fee_basis_points: u64,
         min_output_amount: u64,
         quote_is_wsol_or_usdc: bool,
     ) -> Self {
@@ -392,7 +386,6 @@ impl PumpSwapParams {
             is_mayhem_mode,
             coin_creator,
             is_cashback_coin,
-            cashback_fee_basis_points,
             min_output_amount,
             quote_is_wsol_or_usdc,
         }
@@ -475,7 +468,6 @@ impl PumpSwapParams {
             },
             is_mayhem_mode: pool_data.is_mayhem_mode,
             coin_creator: pool_data.coin_creator,
-            cashback_fee_basis_points: 0,
             min_output_amount: 0,
             quote_is_wsol_or_usdc: false,
         })

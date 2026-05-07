@@ -58,9 +58,45 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         // Trade calculation and account address preparation
         // ========================================
         let quote_is_wsol_or_usdc = protocol_params.quote_is_wsol_or_usdc;
-        let mut creator = Pubkey::default();
-        if params_coin_creator_vault_authority != accounts::DEFAULT_COIN_CREATOR_VAULT_AUTHORITY {
-            creator = params_coin_creator_vault_authority;
+
+        // ========================================
+        // Build instructions
+        // ========================================
+        let mut instructions = Vec::with_capacity(6);
+
+        let input_amount = params.input_amount.unwrap_or(0);
+        if create_wsol_ata {
+            instructions
+                .extend(crate::trading::common::handle_wsol(&params.payer.pubkey(), input_amount));
+        }
+
+        if params.create_output_mint_ata {
+            instructions.extend(
+                crate::common::fast_fn::create_associated_token_account_idempotent_fast_use_seed(
+                    &params.payer.pubkey(),
+                    &params.payer.pubkey(),
+                    if quote_is_wsol_or_usdc { &base_mint } else { &quote_mint },
+                    if quote_is_wsol_or_usdc { &base_token_program } else { &quote_token_program },
+                    params.open_seed_optimize,
+                ),
+            );
+        }
+
+        if let Some(mut cached_ix) = params.ix.clone() {
+            patch_pumpswap_trade_ix_data(
+                &mut cached_ix,
+                input_amount,
+                protocol_params.min_output_amount,
+                quote_is_wsol_or_usdc,
+                params_coin_creator_vault_ata,
+                params_coin_creator_vault_authority,
+                true,
+            )?;
+            instructions.push(cached_ix);
+            if close_wsol_ata {
+                instructions.extend(crate::trading::common::close_wsol(&params.payer.pubkey()));
+            }
+            return Ok(instructions);
         }
 
         let user_base_token_account =
@@ -90,29 +126,6 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         } else {
             fee_recipient_ata(fee_recipient, quote_mint)
         };
-
-        // ========================================
-        // Build instructions
-        // ========================================
-        let mut instructions = Vec::with_capacity(6);
-
-        let input_amount = params.input_amount.unwrap_or(0);
-        if create_wsol_ata {
-            instructions
-                .extend(crate::trading::common::handle_wsol(&params.payer.pubkey(), input_amount));
-        }
-
-        if params.create_output_mint_ata {
-            instructions.extend(
-                crate::common::fast_fn::create_associated_token_account_idempotent_fast_use_seed(
-                    &params.payer.pubkey(),
-                    &params.payer.pubkey(),
-                    if quote_is_wsol_or_usdc { &base_mint } else { &quote_mint },
-                    if quote_is_wsol_or_usdc { &base_token_program } else { &quote_token_program },
-                    params.open_seed_optimize,
-                ),
-            );
-        }
 
         // Create buy instruction
         let mut accounts = Vec::with_capacity(28);
@@ -184,7 +197,9 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             buf.to_vec()
         };
 
-        instructions.push(Instruction { program_id: accounts::AMM_PROGRAM, accounts, data });
+        let trade_ix = Instruction { program_id: accounts::AMM_PROGRAM, accounts, data };
+        crate::common::fast_fn::cache_pool_trade_instruction(pool, true, trade_ix.clone());
+        instructions.push(trade_ix);
         if close_wsol_ata {
             // Close wSOL ATA account, reclaim rent
             instructions.extend(crate::trading::common::close_wsol(&params.payer.pubkey()));
@@ -223,9 +238,59 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         // Trade calculation and account address preparation
         // ========================================
         let quote_is_wsol_or_usdc = protocol_params.quote_is_wsol_or_usdc;
-        let mut creator = Pubkey::default();
-        if params_coin_creator_vault_authority != accounts::DEFAULT_COIN_CREATOR_VAULT_AUTHORITY {
-            creator = params_coin_creator_vault_authority;
+
+        // ========================================
+        // Build instructions
+        // ========================================
+        let mut instructions = Vec::with_capacity(3);
+
+        if create_wsol_ata {
+            instructions.extend(wsol_manager::create_wsol_ata(&params.payer.pubkey()));
+        }
+
+        if let Some(mut cached_ix) = params.ix.clone() {
+            patch_pumpswap_trade_ix_data(
+                &mut cached_ix,
+                input_amount,
+                protocol_params.min_output_amount,
+                quote_is_wsol_or_usdc,
+                params_coin_creator_vault_ata,
+                params_coin_creator_vault_authority,
+                false,
+            )?;
+            instructions.push(cached_ix);
+
+            if close_wsol_ata {
+                instructions.extend(crate::trading::common::close_wsol(&params.payer.pubkey()));
+            }
+            if params.close_input_mint_ata {
+                let user_base_token_account =
+                    crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
+                        &params.payer.pubkey(),
+                        &base_mint,
+                        &base_token_program,
+                        params.open_seed_optimize,
+                    );
+                let user_quote_token_account =
+                    crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
+                        &params.payer.pubkey(),
+                        &quote_mint,
+                        &quote_token_program,
+                        params.open_seed_optimize,
+                    );
+                instructions.push(crate::common::spl_token::close_account(
+                    if quote_is_wsol_or_usdc { &base_token_program } else { &quote_token_program },
+                    if quote_is_wsol_or_usdc {
+                        &user_base_token_account
+                    } else {
+                        &user_quote_token_account
+                    },
+                    &params.payer.pubkey(),
+                    &params.payer.pubkey(),
+                    &[&params.payer.pubkey()],
+                )?);
+            }
+            return Ok(instructions);
         }
 
         // Determine fee recipient based on mayhem mode (pump-public-docs: 10th = Mayhem fee recipient, 11th = WSOL ATA of Mayhem; use any one randomly)
@@ -255,15 +320,6 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
                 &quote_token_program,
                 params.open_seed_optimize,
             );
-
-        // ========================================
-        // Build instructions
-        // ========================================
-        let mut instructions = Vec::with_capacity(3);
-
-        if create_wsol_ata {
-            instructions.extend(wsol_manager::create_wsol_ata(&params.payer.pubkey()));
-        }
 
         // Create sell instruction
         let mut accounts = Vec::with_capacity(28);
@@ -339,11 +395,10 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             data[16..24].copy_from_slice(&protocol_params.min_output_amount.to_le_bytes());
         }
 
-        instructions.push(Instruction {
-            program_id: accounts::AMM_PROGRAM,
-            accounts,
-            data: data.to_vec(),
-        });
+        let trade_ix =
+            Instruction { program_id: accounts::AMM_PROGRAM, accounts, data: data.to_vec() };
+        crate::common::fast_fn::cache_pool_trade_instruction(pool, false, trade_ix.clone());
+        instructions.push(trade_ix);
 
         if close_wsol_ata {
             instructions.extend(crate::trading::common::close_wsol(&params.payer.pubkey()));
@@ -363,6 +418,38 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
         }
         Ok(instructions)
     }
+}
+
+#[inline]
+fn patch_pumpswap_trade_ix_data(
+    ix: &mut Instruction,
+    amount: u64,
+    min_output_amount: u64,
+    quote_is_wsol_or_usdc: bool,
+    params_coin_creator_vault_ata: Pubkey,
+    params_coin_creator_vault_authority: Pubkey,
+    is_buy: bool,
+) -> Result<()> {
+    if ix.data.len() != 24 {
+        ix.data.resize(24, 0);
+    }
+
+    let discriminator = match (is_buy, quote_is_wsol_or_usdc) {
+        (true, true) => &BUY_EXACT_QUOTE_IN_DISCRIMINATOR,
+        (true, false) => &SELL_DISCRIMINATOR,
+        (false, true) => &SELL_DISCRIMINATOR,
+        (false, false) => &BUY_EXACT_QUOTE_IN_DISCRIMINATOR,
+    };
+
+    ix.data[..8].copy_from_slice(discriminator);
+    ix.data[8..16].copy_from_slice(&amount.to_le_bytes());
+    ix.data[16..24].copy_from_slice(&min_output_amount.to_le_bytes());
+    if ix.accounts.len() <= 18 {
+        return Err(anyhow!("cached PumpSwap instruction missing coin creator accounts"));
+    }
+    ix.accounts[17] = AccountMeta::new(params_coin_creator_vault_ata, false);
+    ix.accounts[18] = AccountMeta::new_readonly(params_coin_creator_vault_authority, false);
+    Ok(())
 }
 
 /// Claim cashback for PumpSwap (AMM). Transfers WSOL from UserVolumeAccumulator's WSOL ATA to user's WSOL ATA.

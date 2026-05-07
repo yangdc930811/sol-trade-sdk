@@ -20,8 +20,41 @@ static COMPILE_TIME_HASH: CompileTimeOptimizedEventProcessor =
 const MAX_PDA_CACHE_SIZE: usize = 100_000;
 const MAX_ATA_CACHE_SIZE: usize = 100_000;
 const MAX_INSTRUCTION_CACHE_SIZE: usize = 100_000;
+const MAX_POOL_TRADE_INSTRUCTION_CACHE_SIZE: usize = 100_000;
 
 // --------------------- Instruction Cache ---------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PoolTradeInstructionCacheKey {
+    pool: Pubkey,
+    is_buy: bool,
+}
+
+/// Pool-level PumpSwap/PumpFun protocol instruction cache.
+///
+/// The cached instruction is a template for the stable account list. Callers must
+/// rewrite amount/slippage bytes on a cloned instruction before submitting.
+static POOL_TRADE_INSTRUCTION_CACHE: Lazy<DashMap<PoolTradeInstructionCacheKey, Arc<Instruction>>> =
+    Lazy::new(|| DashMap::with_capacity(MAX_POOL_TRADE_INSTRUCTION_CACHE_SIZE));
+
+#[inline]
+pub fn get_cached_pool_trade_instruction(pool: Pubkey, is_buy: bool) -> Option<Arc<Instruction>> {
+    POOL_TRADE_INSTRUCTION_CACHE
+        .get(&PoolTradeInstructionCacheKey { pool, is_buy })
+        .map(|entry| Arc::clone(entry.value()))
+}
+
+#[inline]
+pub fn cache_pool_trade_instruction(pool: Pubkey, is_buy: bool, instruction: Instruction) {
+    POOL_TRADE_INSTRUCTION_CACHE
+        .insert(PoolTradeInstructionCacheKey { pool, is_buy }, Arc::new(instruction));
+}
+
+#[inline]
+pub fn clear_cached_pool_trade_instructions(pool: Pubkey) {
+    POOL_TRADE_INSTRUCTION_CACHE.remove(&PoolTradeInstructionCacheKey { pool, is_buy: true });
+    POOL_TRADE_INSTRUCTION_CACHE.remove(&PoolTradeInstructionCacheKey { pool, is_buy: false });
+}
 
 /// Instruction cache key for uniquely identifying instruction types and parameters
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

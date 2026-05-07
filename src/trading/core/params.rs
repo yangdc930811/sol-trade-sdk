@@ -20,6 +20,7 @@ use solana_hash::Hash;
 use solana_message::AddressLookupTableAccount;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use std::sync::Arc;
+use solana_program::instruction::Instruction;
 
 /// DEX 参数枚举 - 零开销抽象替代 Box<dyn ProtocolParams>
 #[derive(Clone)]
@@ -101,6 +102,7 @@ pub struct SwapParams {
     /// When Some(false), uses regular buy instruction where slippage is applied to SOL/quote input.
     /// This option only applies to PumpFun and PumpSwap DEXes; it is ignored for other DEXes.
     pub use_exact_sol_amount: Option<bool>,
+    pub ix: Option<Instruction>,
 }
 
 impl SwapParams {
@@ -192,10 +194,10 @@ impl PumpFunParams {
             creator_vault,
             &mint,
         )
-        .or_else(|| {
-            crate::instruction::utils::pumpfun::get_creator_vault_pda(&bonding_curve_account.creator)
-        })
-        .unwrap_or_default();
+            .or_else(|| {
+                crate::instruction::utils::pumpfun::get_creator_vault_pda(&bonding_curve_account.creator)
+            })
+            .unwrap_or_default();
         Self {
             bonding_curve: Arc::new(bonding_curve_account),
             associated_bonding_curve: associated_bonding_curve,
@@ -249,10 +251,10 @@ impl PumpFunParams {
             creator_vault,
             &mint,
         )
-        .or_else(|| {
-            crate::instruction::utils::pumpfun::get_creator_vault_pda(&bonding_curve.creator)
-        })
-        .unwrap_or_default();
+            .or_else(|| {
+                crate::instruction::utils::pumpfun::get_creator_vault_pda(&bonding_curve.creator)
+            })
+            .unwrap_or_default();
         Self {
             bonding_curve: Arc::new(bonding_curve),
             associated_bonding_curve: associated_bonding_curve,
@@ -331,12 +333,6 @@ pub struct PumpSwapParams {
     /// Pool quote token account
     pub pool_quote_token_account: Pubkey,
     /// Base token reserves in the pool
-    pub pool_base_token_reserves: u64,
-    /// Quote token reserves in the pool
-    pub pool_quote_token_reserves: u64,
-    pub lp_fee: u64,
-    pub protocol_fee: u64,
-    pub coin_creator_fee: u64,
     /// Coin creator vault ATA
     pub coin_creator_vault_ata: Pubkey,
     /// Coin creator vault authority
@@ -358,6 +354,8 @@ pub struct PumpSwapParams {
     /// when a creator vault applies — matching on-chain treating creator + cashback as one fee bucket.
     /// Use `0` when unknown (e.g. RPC-only pool decode has no per-mint cashback bps).
     pub cashback_fee_basis_points: u64,
+    pub min_output_amount: u64,
+    pub quote_is_wsol_or_usdc: bool,
 }
 
 impl PumpSwapParams {
@@ -377,6 +375,8 @@ impl PumpSwapParams {
         coin_creator: Pubkey,
         is_cashback_coin: bool,
         cashback_fee_basis_points: u64,
+        min_output_amount: u64,
+        quote_is_wsol_or_usdc: bool,
     ) -> Self {
         let is_mayhem_mode = fee_recipient == MAYHEM_FEE_RECIPIENT_SWAP;
         Self {
@@ -385,11 +385,6 @@ impl PumpSwapParams {
             quote_mint,
             pool_base_token_account,
             pool_quote_token_account,
-            pool_base_token_reserves,
-            pool_quote_token_reserves,
-            lp_fee: 0,
-            protocol_fee: 0,
-            coin_creator_fee: 0,
             coin_creator_vault_ata,
             coin_creator_vault_authority,
             base_token_program,
@@ -398,52 +393,9 @@ impl PumpSwapParams {
             coin_creator,
             is_cashback_coin,
             cashback_fee_basis_points,
+            min_output_amount,
+            quote_is_wsol_or_usdc,
         }
-    }
-
-    /// Fast-path constructor for building PumpSwap parameters directly from decoded
-    /// trade/event data and the accompanying instruction accounts, avoiding RPC
-    /// lookups and associated latency. Token program IDs should be sourced from
-    /// the instruction accounts themselves to respect Token Program vs Token-2022
-    /// differences.
-    ///
-    /// When building from event/parser (e.g. sol-parser-sdk), pass `is_cashback_coin`
-    /// from the event so that buy/sell instructions include the correct remaining
-    /// accounts for cashback.
-    pub fn from_trade(
-        pool: Pubkey,
-        base_mint: Pubkey,
-        quote_mint: Pubkey,
-        pool_base_token_account: Pubkey,
-        pool_quote_token_account: Pubkey,
-        pool_base_token_reserves: u64,
-        pool_quote_token_reserves: u64,
-        coin_creator_vault_ata: Pubkey,
-        coin_creator_vault_authority: Pubkey,
-        base_token_program: Pubkey,
-        quote_token_program: Pubkey,
-        fee_recipient: Pubkey,
-        coin_creator: Pubkey,
-        is_cashback_coin: bool,
-        cashback_fee_basis_points: u64,
-    ) -> Self {
-        Self::new(
-            pool,
-            base_mint,
-            quote_mint,
-            pool_base_token_account,
-            pool_quote_token_account,
-            pool_base_token_reserves,
-            pool_quote_token_reserves,
-            coin_creator_vault_ata,
-            coin_creator_vault_authority,
-            base_token_program,
-            quote_token_program,
-            fee_recipient,
-            coin_creator,
-            is_cashback_coin,
-            cashback_fee_basis_points,
-        )
     }
 
     pub async fn from_mint_by_rpc(
@@ -508,13 +460,8 @@ impl PumpSwapParams {
             quote_mint: pool_data.quote_mint,
             pool_base_token_account: pool_data.pool_base_token_account,
             pool_quote_token_account: pool_data.pool_quote_token_account,
-            lp_fee: 0,
-            protocol_fee: 0,
-            coin_creator_fee: 0,
             coin_creator_vault_ata: coin_creator_vault_ata.unwrap(),
             coin_creator_vault_authority: coin_creator_vault_authority.unwrap(),
-            pool_base_token_reserves,
-            pool_quote_token_reserves,
             base_token_program: if pool_data.pool_base_token_account == base_token_program_ata {
                 crate::constants::TOKEN_PROGRAM
             } else {
@@ -529,6 +476,8 @@ impl PumpSwapParams {
             is_mayhem_mode: pool_data.is_mayhem_mode,
             coin_creator: pool_data.coin_creator,
             cashback_fee_basis_points: 0,
+            min_output_amount: 0,
+            quote_is_wsol_or_usdc: false,
         })
     }
 }
@@ -858,9 +807,9 @@ impl RaydiumAmmV4Params {
             coin_need_take_pnl: 0,
             pc_need_take_pnl: 0,
             swap_fee_numerator:
-                crate::instruction::utils::raydium_amm_v4::accounts::SWAP_FEE_NUMERATOR,
+            crate::instruction::utils::raydium_amm_v4::accounts::SWAP_FEE_NUMERATOR,
             swap_fee_denominator:
-                crate::instruction::utils::raydium_amm_v4::accounts::SWAP_FEE_DENOMINATOR,
+            crate::instruction::utils::raydium_amm_v4::accounts::SWAP_FEE_DENOMINATOR,
         }
     }
     pub async fn from_amm_address_by_rpc(

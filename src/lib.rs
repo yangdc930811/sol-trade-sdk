@@ -169,7 +169,7 @@ impl TradingInfrastructure {
                     config.mev_protection,
                 ),
             )
-            .await
+                .await
             {
                 Ok(Ok(swqos_client)) => swqos_clients.push(swqos_client),
                 Ok(Err(err)) => {
@@ -223,7 +223,7 @@ impl TradingInfrastructure {
                 SwqosConfig::Default(config.rpc_url.clone()),
                 config.mev_protection,
             )
-            .await
+                .await
             {
                 Ok(c) => swqos_clients.push(c),
                 Err(e) => {
@@ -398,6 +398,7 @@ pub struct TradeBuyParams {
     pub use_exact_sol_amount: Option<bool>,
     /// 可选：事件收到时间（微秒，与 sol-parser-sdk 的 metadata.grpc_recv_us / clock::now_micros 同源）。不传且开启 log_enabled 时 SDK 用 now_micros() 作为起点，打印起点→提交耗时。
     pub grpc_recv_us: Option<i64>,
+    pub ix: Option<Instruction>,
 }
 
 /// Parameters for executing sell orders across different DEX protocols
@@ -444,6 +445,7 @@ pub struct TradeSellParams {
     pub simulate: bool,
     /// 可选：事件收到时间（微秒，与 sol-parser-sdk clock 同源）。不传且开启 log_enabled 时 SDK 用 now_micros() 作为起点。
     pub grpc_recv_us: Option<i64>,
+    pub ix: Option<Instruction>,
 }
 
 #[derive(Clone)]
@@ -566,7 +568,7 @@ impl TradingClient {
             tokio::time::Duration::from_secs(timeout_secs),
             rpc.send_and_confirm_transaction(&tx),
         )
-        .await;
+            .await;
         match send_result {
             Ok(Ok(_signature)) => Ok(()),
             Ok(Err(e)) => {
@@ -623,7 +625,7 @@ impl TradingClient {
                 &create_ata_ixs,
                 TIMEOUT_SECS,
             )
-            .await
+                .await
             {
                 Ok(()) => {
                     if sdk_log::sdk_log_enabled() {
@@ -692,9 +694,9 @@ impl TradingClient {
                 BALANCE_CHECK_TIMEOUT,
                 infrastructure.rpc.get_balance(&payer.pubkey()),
             )
-            .await
-            .unwrap_or(Ok(0))
-            .unwrap_or(0);
+                .await
+                .unwrap_or(Ok(0))
+                .unwrap_or(0);
             if balance >= MIN_SOL_FOR_WSOL_ATA_LAMPORTS {
                 Self::ensure_wsol_ata(&payer, &infrastructure.rpc).await;
             } else if sdk_log::sdk_log_enabled() {
@@ -898,6 +900,7 @@ impl TradingClient {
             check_min_tip: self.check_min_tip,
             grpc_recv_us: params.grpc_recv_us,
             use_exact_sol_amount: params.use_exact_sol_amount,
+            ix: params.ix,
         };
 
         let swap_result = executor.swap(buy_params).await;
@@ -1005,6 +1008,7 @@ impl TradingClient {
             check_min_tip: self.check_min_tip,
             grpc_recv_us: params.grpc_recv_us,
             use_exact_sol_amount: None,
+            ix: params.ix,
         };
 
         let swap_result = executor.swap(sell_params).await;
@@ -1039,7 +1043,7 @@ impl TradingClient {
             0.0,
             None,
         )
-        .await?;
+            .await?;
 
         let signature = transaction
             .signatures
@@ -1123,7 +1127,7 @@ impl TradingClient {
                 tip,
                 params.durable_nonce.as_ref(),
             )
-            .await?;
+                .await?;
 
             let signature = transaction
                 .signatures
@@ -1179,7 +1183,7 @@ impl TradingClient {
             sender_config,
             self.check_min_tip,
         )
-        .await?;
+            .await?;
 
         Ok((result.0, result.1, result.2.map(TradeError::from)))
     }
@@ -1388,7 +1392,7 @@ impl TradingClient {
         let ix = crate::instruction::pumpfun::claim_cashback_pumpfun_instruction(
             &self.payer.pubkey(),
         )
-        .ok_or_else(|| anyhow::anyhow!("Failed to build PumpFun claim_cashback instruction"))?;
+            .ok_or_else(|| anyhow::anyhow!("Failed to build PumpFun claim_cashback instruction"))?;
         let recent_blockhash = self.infrastructure.rpc.get_latest_blockhash().await?;
         let mut transaction = Transaction::new_with_payer(&[ix], Some(&self.payer.pubkey()));
         transaction.sign(&[&*self.payer], recent_blockhash);
@@ -1419,7 +1423,7 @@ impl TradingClient {
             WSOL_TOKEN_ACCOUNT,
             crate::constants::TOKEN_PROGRAM,
         )
-        .ok_or_else(|| anyhow::anyhow!("Failed to build PumpSwap claim_cashback instruction"))?;
+            .ok_or_else(|| anyhow::anyhow!("Failed to build PumpSwap claim_cashback instruction"))?;
         instructions.push(ix);
         let recent_blockhash = self.infrastructure.rpc.get_latest_blockhash().await?;
         let mut transaction =

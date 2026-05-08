@@ -82,7 +82,9 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             );
         }
 
-        if let Some(mut cached_ix) = params.ix.clone() {
+        if let Some(mut cached_ix) =
+            crate::common::fast_fn::get_cached_pool_trade_instruction(pool, true)
+        {
             patch_pumpswap_trade_ix_data(
                 &mut cached_ix,
                 input_amount,
@@ -248,7 +250,9 @@ impl InstructionBuilder for PumpSwapInstructionBuilder {
             instructions.extend(wsol_manager::create_wsol_ata(&params.payer.pubkey()));
         }
 
-        if let Some(mut cached_ix) = params.ix.clone() {
+        if let Some(mut cached_ix) =
+            crate::common::fast_fn::get_cached_pool_trade_instruction(pool, false)
+        {
             patch_pumpswap_trade_ix_data(
                 &mut cached_ix,
                 input_amount,

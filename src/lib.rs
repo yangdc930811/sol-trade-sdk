@@ -398,7 +398,6 @@ pub struct TradeBuyParams {
     pub use_exact_sol_amount: Option<bool>,
     /// 可选：事件收到时间（微秒，与 sol-parser-sdk 的 metadata.grpc_recv_us / clock::now_micros 同源）。不传且开启 log_enabled 时 SDK 用 now_micros() 作为起点，打印起点→提交耗时。
     pub grpc_recv_us: Option<i64>,
-    pub ix: Option<Instruction>,
 }
 
 /// Parameters for executing sell orders across different DEX protocols
@@ -445,7 +444,6 @@ pub struct TradeSellParams {
     pub simulate: bool,
     /// 可选：事件收到时间（微秒，与 sol-parser-sdk clock 同源）。不传且开启 log_enabled 时 SDK 用 now_micros() 作为起点。
     pub grpc_recv_us: Option<i64>,
-    pub ix: Option<Instruction>,
 }
 
 #[derive(Clone)]
@@ -900,7 +898,6 @@ impl TradingClient {
             check_min_tip: self.check_min_tip,
             grpc_recv_us: params.grpc_recv_us,
             use_exact_sol_amount: params.use_exact_sol_amount,
-            ix: params.ix,
         };
 
         let swap_result = executor.swap(buy_params).await;
@@ -1008,7 +1005,6 @@ impl TradingClient {
             check_min_tip: self.check_min_tip,
             grpc_recv_us: params.grpc_recv_us,
             use_exact_sol_amount: None,
-            ix: params.ix,
         };
 
         let swap_result = executor.swap(sell_params).await;

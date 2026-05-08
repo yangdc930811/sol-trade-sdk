@@ -34,20 +34,19 @@ struct PoolTradeInstructionCacheKey {
 ///
 /// The cached instruction is a template for the stable account list. Callers must
 /// rewrite amount/slippage bytes on a cloned instruction before submitting.
-static POOL_TRADE_INSTRUCTION_CACHE: Lazy<DashMap<PoolTradeInstructionCacheKey, Arc<Instruction>>> =
+static POOL_TRADE_INSTRUCTION_CACHE: Lazy<DashMap<PoolTradeInstructionCacheKey, Instruction>> =
     Lazy::new(|| DashMap::with_capacity(MAX_POOL_TRADE_INSTRUCTION_CACHE_SIZE));
 
 #[inline]
-pub fn get_cached_pool_trade_instruction(pool: Pubkey, is_buy: bool) -> Option<Arc<Instruction>> {
+pub fn get_cached_pool_trade_instruction(pool: Pubkey, is_buy: bool) -> Option<Instruction> {
     POOL_TRADE_INSTRUCTION_CACHE
         .get(&PoolTradeInstructionCacheKey { pool, is_buy })
-        .map(|entry| Arc::clone(entry.value()))
+        .map(|entry| entry.value().clone())
 }
 
 #[inline]
 pub fn cache_pool_trade_instruction(pool: Pubkey, is_buy: bool, instruction: Instruction) {
-    POOL_TRADE_INSTRUCTION_CACHE
-        .insert(PoolTradeInstructionCacheKey { pool, is_buy }, Arc::new(instruction));
+    POOL_TRADE_INSTRUCTION_CACHE.insert(PoolTradeInstructionCacheKey { pool, is_buy }, instruction);
 }
 
 #[inline]

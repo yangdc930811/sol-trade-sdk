@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::VecDeque;
 use solana_sdk::pubkey::Pubkey;
 use sol_common::common::constants::RAYDIUM_CLMM_PROGRAM_ID;
 use sol_common::protocols::raydium_clmm::states::pool::{PoolState, POOL_TICK_ARRAY_BITMAP_SEED};
@@ -58,14 +58,13 @@ pub fn load_cur_and_next_five_tick_array(
     pool_state: &PoolState,
     tickarray_bitmap_extension: &TickArrayBitmapExtension,
     zero_for_one: bool,
-) -> AnyResult<HashSet<Pubkey>> {
+) -> AnyResult<VecDeque<Pubkey>> {
     let (_, mut current_valid_tick_array_start_index) = pool_state
         .get_first_initialized_tick_array(&mut Some(*tickarray_bitmap_extension), zero_for_one)?;
-    let mut tick_array_keys = HashSet::new();
-    tick_array_keys.insert(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
+    let mut tick_array_keys = VecDeque::new();
+    tick_array_keys.push_back(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
 
-    // 修改成只获取前3个账户
-    let mut max_array_size = 3;
+    let mut max_array_size = 5;
     while max_array_size != 0 {
         let next_tick_array_index = pool_state
             .next_initialized_tick_array_start_index(
@@ -77,7 +76,7 @@ pub fn load_cur_and_next_five_tick_array(
             break;
         }
         current_valid_tick_array_start_index = next_tick_array_index.unwrap();
-        tick_array_keys.insert(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
+        tick_array_keys.push_back(get_tick_array_pda_from_cache(pool_key, current_valid_tick_array_start_index).unwrap());
         max_array_size -= 1;
     }
     Ok(tick_array_keys)

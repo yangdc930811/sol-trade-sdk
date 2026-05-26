@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 /// Default pool idle timeout for SWQOS HTTP client (seconds). 连接池空闲超时（秒）。
-const HTTP_POOL_IDLE_TIMEOUT_SECS: u64 = 300;
+const HTTP_POOL_IDLE_TIMEOUT_SECS: u64 = 3600;
 /// Max idle connections per host. 每主机最大空闲连接数。
 const HTTP_POOL_MAX_IDLE_PER_HOST: usize = 4;
 /// TCP keepalive interval (seconds). TCP 保活间隔（秒）。
@@ -42,6 +42,7 @@ pub fn default_http_client_builder() -> reqwest::ClientBuilder {
         .http2_keep_alive_interval(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS))
         .http2_keep_alive_timeout(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS))
         .http2_adaptive_window(true)
+        .http2_keep_alive_while_idle(true)  // ← 核心：空闲时也发 ping
         .timeout(Duration::from_millis(HTTP_TIMEOUT_MS))
         .connect_timeout(Duration::from_millis(HTTP_CONNECT_TIMEOUT_MS))
 }

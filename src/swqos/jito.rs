@@ -13,7 +13,7 @@ use crate::swqos::SwqosClientTrait;
 use crate::swqos::{SwqosType, TradeType};
 use anyhow::Result;
 use solana_sdk::transaction::VersionedTransaction;
-
+use tracing::{info, warn};
 use crate::{common::SolanaRpcClient, constants::swqos::JITO_TIP_ACCOUNTS};
 
 pub struct JitoClient {
@@ -169,9 +169,9 @@ impl JitoClient {
 
         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&response_text) {
             if response_json.get("result").is_some() {
-                println!(" jito {} submitted: {:?}", trade_type, start_time.elapsed());
+                info!(" jito {} submitted: {:?} response_json: {:?}", trade_type, start_time.elapsed(), response_json);
             } else if let Some(_error) = response_json.get("error") {
-                eprintln!(" jito {} submission failed after {:?}: {:?}", trade_type, start_time.elapsed(), _error);
+                warn!(" jito {} submission failed after {:?}: {:?}", trade_type, start_time.elapsed(), _error);
             }
         }
 

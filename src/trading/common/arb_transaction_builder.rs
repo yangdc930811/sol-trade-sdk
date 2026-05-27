@@ -16,7 +16,7 @@ pub fn build_transaction(
     unit_limit: u32,
     unit_price: u64,
     business_instructions: Vec<Instruction>,
-    address_lookup_table_account: Option<AddressLookupTableAccount>,
+    address_lookup_table_account: Option<&AddressLookupTableAccount>,
     recent_blockhash: Option<Hash>,
     with_tip: bool,
     tip_account: &Pubkey,
@@ -55,7 +55,7 @@ pub fn build_transaction(
 fn build_versioned_transaction(
     payer: Arc<Keypair>,
     instructions: Vec<Instruction>,
-    address_lookup_table_account: Option<AddressLookupTableAccount>,
+    address_lookup_table_account: Option<&AddressLookupTableAccount>,
     blockhash: Hash,
 ) -> Result<VersionedTransaction, anyhow::Error> {
     // 使用预分配的交易构建器以降低延迟
@@ -64,7 +64,7 @@ fn build_versioned_transaction(
     let versioned_msg = builder.build_zero_alloc(
         &payer.pubkey(),
         &instructions,
-        address_lookup_table_account.as_ref(),
+        address_lookup_table_account,
         blockhash,
     );
 

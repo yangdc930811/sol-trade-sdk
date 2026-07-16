@@ -64,6 +64,8 @@ pub struct PumpSwapParams {
     /// Effective PumpSwap fee bps for this pool snapshot. Instruction building reads this
     /// only from params, so hot-path trading never adds an RPC call for fee discovery.
     pub fee_basis_points: PumpSwapFeeBasisPoints,
+    pub min_output_amount: u64,
+    pub quote_is_wsol_or_usdc: bool
 }
 
 impl PumpSwapParams {
@@ -114,6 +116,8 @@ impl PumpSwapParams {
                 crate::instruction::utils::pumpswap::accounts::PROTOCOL_FEE_BASIS_POINTS,
                 creator_fee_basis_points,
             ),
+            min_output_amount: 0,
+            quote_is_wsol_or_usdc: false,
         }
     }
 
@@ -342,6 +346,8 @@ impl PumpSwapParams {
                 raw_fee_basis_points.protocol_fee_basis_points,
                 creator_fee_basis_points,
             ),
+            min_output_amount: 0,
+            quote_is_wsol_or_usdc: false,
         })
     }
 }

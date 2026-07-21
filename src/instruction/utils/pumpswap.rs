@@ -768,7 +768,7 @@ pub async fn fetch_pool(
     decode_pool_account(&account).map_err(anyhow::Error::msg)
 }
 
-fn decode_pool_account(account: &solana_sdk::account::Account) -> Result<Pool, String> {
+pub fn decode_pool_account(account: &solana_sdk::account::Account) -> Result<Pool, String> {
     if account.owner != accounts::AMM_PROGRAM {
         return Err("Account is not owned by PumpSwap program".to_string());
     }

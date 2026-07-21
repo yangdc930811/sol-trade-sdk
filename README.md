@@ -55,6 +55,7 @@
   - [📊 Usage Examples Summary Table](#-usage-examples-summary-table)
   - [⚙️ SWQoS Service Configuration](#️-swqos-service-configuration)
   - [Astralane (Binary / Plain / QUIC)](#astralane-binary--plain--quic)
+  - [Glaive (Binary HTTP / QUIC)](#glaive-binary-http--quic)
   - [🔧 Middleware System](#-middleware-system)
   - [🔍 Address Lookup Tables](#-address-lookup-tables)
   - [🔍 Nonce Cache](#-nonce-cache)
@@ -86,15 +87,15 @@ This SDK is available in multiple languages:
 | Area | Coverage |
 |------|----------|
 | DEX protocols | PumpFun, PumpSwap, Bonk, Meteora DAMM v2, Raydium AMM v4, Raydium CPMM |
-| Submit lanes | Default Solana RPC plus Jito, Nextblock, ZeroSlot, Temporal, Bloxroute, FlashBlock, BlockRazor, Node1, Astralane, SpeedLanding, and other SWQoS providers |
+| Submit lanes | Default Solana RPC plus Jito, Nextblock, ZeroSlot, Temporal, Bloxroute, FlashBlock, BlockRazor, Node1, Astralane, Glaive, SpeedLanding, and other SWQoS providers |
 | Trading workflows | Buy/sell, exact input/output, copy trading, sniper trading, address lookup tables, durable nonce, middleware, shared infrastructure |
 | Hot-path design | Caller supplies recent blockhash or durable nonce; trade execution avoids RPC reads for blockhash, account, or balance data |
 
 ## 🔖 Current Release
 
-**Rust crate:** `sol-trade-sdk = "4.0.21"`
+**Rust crate:** `sol-trade-sdk = "4.0.23"`
 
-This release refreshes PumpFun native-SOL quote handling so SOL/WSOL sentinels prefer the smaller V1 hot path, keeps the default RPC submit lane active alongside SWQoS lanes, restores the fast-submit result window to 5 seconds, and aligns Raydium CPMM fixed-output swaps with the on-chain `swap_base_out` instruction. Trade execution requires a caller-supplied `recent_blockhash` or durable nonce; hot-path execution does not query RPC for blockhash, account, or balance data.
+This release updates PumpSwap for the July 2026 virtual quote reserve rollout. Pool and event schemas include `virtual_quote_reserves`, and all PumpSwap buy, sell, pricing, and dynamic-fee calculations use `quote_vault_balance + virtual_quote_reserves`.
 
 ## ✨ Features
 
@@ -104,7 +105,7 @@ This release refreshes PumpFun native-SOL quote handling so SOL/WSOL sentinels p
 4. **Raydium CPMM Trading**: Support for Raydium CPMM (Concentrated Pool Market Maker) trading operations
 5. **Raydium AMM V4 Trading**: Support for Raydium AMM V4 (Automated Market Maker) trading operations
 6. **Meteora DAMM V2 Trading**: Support for Meteora DAMM V2 (Dynamic AMM) trading operations
-7. **Multiple MEV Protection**: Support for Jito, Nextblock, ZeroSlot, Temporal, Bloxroute, FlashBlock, BlockRazor, Node1, Astralane, LunarLander and other services
+7. **Multiple MEV Protection**: Support for Jito, Nextblock, ZeroSlot, Temporal, Bloxroute, FlashBlock, BlockRazor, Node1, Astralane, Glaive, LunarLander and other services
 8. **Concurrent Trading**: Submit through every configured SWQoS provider plus the default RPC lane; the first accepted result can return early while slower routes continue submitting
 9. **Unified Trading Interface**: Use unified trading protocol enums for trading operations
 10. **Middleware System**: Support for custom instruction middleware to modify, add, or remove instructions before transaction execution
@@ -126,14 +127,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 # Add to your Cargo.toml
-sol-trade-sdk = { path = "./sol-trade-sdk", version = "4.0.21" }
+sol-trade-sdk = { path = "./sol-trade-sdk", version = "4.0.23" }
 ```
 
 ### Use crates.io
 
 ```toml
 # Add to your Cargo.toml
-sol-trade-sdk = "4.0.21"
+sol-trade-sdk = "4.0.23"
 ```
 
 ## 🛠️ Usage Examples
@@ -169,6 +170,13 @@ let swqos_configs: Vec<SwqosConfig> = vec![
         None,
         Some(SwqosTransport::Http),
     ),
+    // Glaive: None = QUIC (default, UDP/4000); Some(Http) = binary HTTP
+    SwqosConfig::Glaive(
+        "your_glaive_uuid_v4_api_key".to_string(),
+        SwqosRegion::Frankfurt,
+        None,
+        None,
+    ),
 ];
 // Create TradeConfig instance
 let trade_config = TradeConfig::builder(rpc_url, swqos_configs, commitment)
@@ -177,7 +185,7 @@ let trade_config = TradeConfig::builder(rpc_url, swqos_configs, commitment)
     // .log_enabled(true)                  // default: true  - SDK timing / SWQOS logs
     // .check_min_tip(false)               // default: false - filter SWQOS below min tip
     // .swqos_cores_from_end(false)        // default: false - bind SWQOS to last N CPU cores
-    // .mev_protection(false)              // default: false - MEV (Astralane QUIC :9000 or HTTP mev-protect / BlockRazor)
+    // .mev_protection(false)              // default: false - MEV protection for Astralane / BlockRazor / Glaive
     .build();
 
 // Create TradingClient
@@ -348,6 +356,7 @@ let temporal_config = SwqosConfig::Temporal(
 - If a custom URL is provided (`Some(url)`), it will be used instead of the regional endpoint
 - If no custom URL is provided (`None`), the system will use the default endpoint for the specified `SwqosRegion`
 - This allows for maximum flexibility while maintaining backward compatibility 
+- For Glaive, a custom QUIC URL is `host:4000`; a custom HTTP URL is an absolute `http://` or `https://` base URL. The SDK appends `/binary` and authentication parameters for HTTP.
 
 When using multiple MEV services, you need to use `Durable Nonce`. Fetch the latest nonce value and attach it to the high-level buy/sell params:
 
@@ -395,6 +404,42 @@ let swqos_configs: Vec<SwqosConfig> = vec![
 - **Binary** (default): `None` or `Some(AstralaneTransport::Binary)` — `/irisb`, bincode body.
 - **Plain**: `Some(AstralaneTransport::Plain)` — `/iris`.
 - **QUIC**: `Some(AstralaneTransport::Quic)` — regional `host:7000` / `:9000` (MEV); same API key.
+
+#### Glaive (Binary HTTP / QUIC)
+
+Glaive supports binary HTTP and persistent QUIC. The SDK defaults to QUIC because Glaive documents it as the lowest-latency submission path. API keys must be UUID v4 strings. Every transaction must tip at least `0.0001 SOL`; the SDK selects one of Glaive's six official tip accounts.
+
+```rust
+use sol_trade_sdk::{
+    swqos::{SwqosConfig, SwqosRegion},
+    SwqosTransport,
+};
+
+let glaive_quic = SwqosConfig::Glaive(
+    "your_glaive_uuid_v4_api_key".to_string(),
+    SwqosRegion::Frankfurt,
+    None, // fra.glaive.trade:4000
+    None, // QUIC by default
+);
+
+let glaive_http = SwqosConfig::Glaive(
+    "your_glaive_uuid_v4_api_key".to_string(),
+    SwqosRegion::Frankfurt,
+    None, // http://fra.glaive.trade/binary?api-key=...
+    Some(SwqosTransport::Http),
+);
+```
+
+- **QUIC** (default): `None` or `Some(SwqosTransport::Quic)`. Uses UDP port `4000`, ALPN `solana-tpu`, SNI `glaive-intake`, one persistent authenticated connection, and one unidirectional stream per transaction.
+- **Binary HTTP**: `Some(SwqosTransport::Http)`. Sends raw transaction bytes to `/binary?api-key=...` and keeps the pooled connection warm through `/health`.
+- `Some(SwqosTransport::Grpc)` is rejected because Glaive does not expose a gRPC submission protocol.
+- **MEV protection**: `.mev_protection(true)` sets QUIC auth flag bit 0 or appends `mev-protect=true` to binary HTTP.
+- **Tip configuration**: set the Glaive lane's gas-fee strategy tip to at least `0.0001 SOL`. `.check_min_tip(true)` filters lower values locally; it does not raise the configured tip.
+- **Regions**: Amsterdam, Frankfurt, London, and New York are native Glaive PoPs. Other `SwqosRegion` values map to the nearest published endpoint.
+- **Mainnet only**: Glaive does not currently publish a testnet endpoint.
+- Built-in HTTP origins follow Glaive's documented `http://` endpoints. Prefer the default QUIC mode, or provide a custom HTTPS endpoint if Glaive assigns one.
+
+See the [official Glaive documentation](https://glaive.trade/docs) for credentials, rate limits, and protocol details.
 
 ---
 
@@ -506,6 +551,14 @@ For **PumpSwap** (Pump AMM), `coin_creator_vault_ata` and `coin_creator_vault_au
 - **sol-parser-sdk**: Instruction parser sets them from accounts 17 and 18; the account filler also fills them when the event comes from logs. Use `PumpSwapParams::from_trade(..., e.coin_creator_vault_ata, e.coin_creator_vault_authority, ...)` with the buy/sell event `e`.
 - **solana-streamer**: Instruction parser sets them from `accounts.get(17)` and `accounts.get(18)`. Use the same `from_trade` with the event's `coin_creator_vault_ata` and `coin_creator_vault_authority`.
 
+#### PumpSwap: virtual quote reserves
+
+PumpSwap quotes must use `effective_quote_reserves = pool_quote_token_account.amount + virtual_quote_reserves`. The Pool account and BuyEvent/SellEvent encode `virtual_quote_reserves` as `i128`.
+
+- RPC constructors such as `PumpSwapParams::from_pool_address_by_rpc` read and apply the Pool field automatically.
+- Event fast paths must pass the event's raw `pool_quote_token_reserves` and `virtual_quote_reserves` separately to `PumpSwapParams::from_trade(...)` or `from_trade_with_fee_basis_points(...)`. Do not add them before calling the constructor.
+- The SDK uses effective reserves for buys, sells, prices, and dynamic fee-tier selection. Invalid signed sums return an error instead of wrapping.
+
 ## 🛡️ MEV Protection Services
 
 You can apply for a key through the official website: [Community Website](https://fnzero.dev/swqos)
@@ -515,6 +568,7 @@ You can apply for a key through the official website: [Community Website](https:
 - **FlashBlock**: High-speed transaction execution with API key authentication
 - **BlockRazor**: High-speed transaction execution with API key authentication
 - **Astralane**: Blockchain network acceleration (Binary/Plain HTTP and QUIC)
+- **Glaive**: Persistent QUIC and binary HTTP transaction delivery (minimum tip: 0.0001 SOL)
 - **SpeedLanding**: High-speed transaction execution with API key authentication
 - **Node1**: High-speed transaction execution with API key authentication
 - **LunarLander**: HelloMoon transaction landing service (minimum tip: 0.001 SOL)

@@ -39,12 +39,6 @@
     <a href="https://discord.gg/vuazbGkqQE">Discord</a>
 </p>
 
-> ☕ **Support This Project**
->
-> This SDK is completely free and open source. However, maintaining and continuously updating it requires significant AI computing resources and token consumption. If this SDK helps with your trading development, consider making a monthly SOL donation — any amount is appreciated and helps keep this project alive!
->
-> **Donation Wallet:** `6oW7AXz1yRb57pYSxysuXnMs2aR1ha5rzGzReZ1MjPV8`
-
 ## 📋 Table of Contents
 
 - [✨ Features](#-features)
@@ -224,7 +218,7 @@ For detailed information about all trading parameters, see the [Trading Paramete
 
 ```rust
 use sol_trade_sdk::{
-    AccountPolicy, BuyAmount, DexType, SimpleBuyParams, TradeTokenType,
+    AccountPolicy, BuyAmount, trading::factory::DexType, SimpleBuyParams, TradeTokenType,
     trading::core::params::DexParamEnum,
 };
 
@@ -387,7 +381,7 @@ client.buy_simple(buy_params).await?;
 Astralane supports **Binary** HTTP (`/irisb`), **Plain** HTTP (`/iris`), and **QUIC** (`host:7000`, or `:9000` when global `mev_protection` is true). Pass `Some(AstralaneTransport::Plain)`, `Some(AstralaneTransport::Quic)`, or use `None` / omit for **Binary** (default). Global `mev_protection` adds `mev-protect=true` on HTTP or selects QUIC port 9000.
 
 ```rust
-use sol_trade_sdk::{SwqosConfig, SwqosRegion, AstralaneTransport};
+use sol_trade_sdk::{swqos::{SwqosConfig, SwqosRegion}, AstralaneTransport};
 
 let swqos_configs: Vec<SwqosConfig> = vec![
     SwqosConfig::Default(rpc_url.clone()),

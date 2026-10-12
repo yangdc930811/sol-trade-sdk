@@ -41,7 +41,11 @@ use solana_sdk::{
 
 #[inline]
 fn effective_pump_mint_token_program(protocol_params: &PumpFunParams, mint: &Pubkey) -> Pubkey {
-    if mint.to_string().ends_with("pump") {
+    let mut encoded = [0_u8; 44];
+    let has_pump_suffix = bs58::encode(mint.as_ref())
+        .onto(&mut encoded[..])
+        .is_ok_and(|len| encoded[..len].ends_with(b"pump"));
+    if has_pump_suffix {
         return TOKEN_PROGRAM_2022;
     }
     let tp = protocol_params.token_program;
@@ -308,6 +312,7 @@ fn build_buy_legacy(params: &SwapParams) -> Result<Vec<Instruction>> {
         accounts::FEE_PROGRAM_META,
     ];
     metas.push(AccountMeta::new_readonly(bonding_curve_v2, false));
+    // Official @pump-fun/pump-sdk@2.0.0: buybackFeeRecipient remaining is writable.
     metas.push(AccountMeta::new(get_protocol_extra_fee_recipient_random(), false));
 
     instructions.push(Instruction::new_with_bytes(accounts::PUMPFUN, buy_data.as_slice(), metas));
@@ -444,6 +449,7 @@ fn build_sell_legacy(params: &SwapParams) -> Result<Vec<Instruction>> {
     }
 
     metas.push(AccountMeta::new_readonly(bonding_curve_v2, false));
+    // Official @pump-fun/pump-sdk@2.0.0: buybackFeeRecipient remaining is writable.
     metas.push(AccountMeta::new(get_protocol_extra_fee_recipient_random(), false));
 
     instructions.push(Instruction::new_with_bytes(accounts::PUMPFUN, sell_data.as_slice(), metas));
@@ -887,6 +893,8 @@ pub fn claim_cashback_pumpfun_instruction(payer: &Pubkey) -> Option<Instruction>
         AccountMeta::new(*payer, true),
         AccountMeta::new(user_volume_accumulator, false),
         crate::constants::SYSTEM_PROGRAM_META,
+        accounts::EVENT_AUTHORITY_META,
+        accounts::PUMPFUN_META,
     ];
     let ix =
         Instruction::new_with_bytes(accounts::PUMPFUN, &CLAIM_CASHBACK_DISCRIMINATOR, ix_accounts);
@@ -967,6 +975,7 @@ mod tests {
             max_sender_concurrency: 0,
             effective_core_ids: Arc::new(Vec::new()),
             check_min_tip: false,
+            transaction_version: crate::common::TradeTransactionVersion::V0,
             grpc_recv_us: None,
             use_exact_sol_amount: Some(true),
         }
@@ -976,8 +985,20 @@ mod tests {
     fn test_claim_cashback_instruction() {
         let payer = Pubkey::new_unique();
         let ix = claim_cashback_pumpfun_instruction(&payer).unwrap();
-        assert_eq!(ix.accounts.len(), 3);
-        assert_eq!(ix.accounts[0].pubkey, payer);
+        let accumulator = get_user_volume_accumulator_pda(&payer).unwrap();
+
+        assert_eq!(ix.program_id, accounts::PUMPFUN);
+        assert_eq!(ix.data, [37, 58, 35, 126, 190, 53, 228, 197]);
+        assert_eq!(
+            ix.accounts,
+            vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new(accumulator, false),
+                crate::constants::SYSTEM_PROGRAM_META,
+                accounts::EVENT_AUTHORITY_META,
+                accounts::PUMPFUN_META,
+            ]
+        );
     }
 
     #[test]
@@ -986,11 +1007,12 @@ mod tests {
         let params = swap_params_for_buy(pump_mint(), TOKEN_PROGRAM);
         let instructions = build_buy(&params).unwrap();
 
-        assert_eq!(instructions.len(), 3);
-        assert_eq!(instructions[2].accounts[8].pubkey, TOKEN_PROGRAM_2022);
-        assert_eq!(instructions[1].program_id, TOKEN_PROGRAM_2022);
-        assert_eq!(instructions[2].accounts.len(), 18);
-        assert_eq!(instructions[2].data.len(), 25);
+        assert_eq!(instructions.len(), 2);
+        assert_eq!(instructions[1].accounts[8].pubkey, TOKEN_PROGRAM_2022);
+        assert_eq!(instructions[0].program_id, crate::constants::ASSOCIATED_TOKEN_PROGRAM_ID);
+        assert_eq!(instructions[0].accounts[5].pubkey, TOKEN_PROGRAM_2022);
+        assert_eq!(instructions[1].accounts.len(), 18);
+        assert_eq!(instructions[1].data.len(), 25);
     }
 
     #[test]
@@ -1107,8 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn pumpfun_v2_explicit_wsol_input_with_output_ata_create_reports_oversized_without_dropping_priority(
-    ) {
+    fn pumpfun_v2_explicit_wsol_input_with_output_ata_create_fits_without_dropping_priority() {
         let mut params = swap_params_for_buy(pump_mint(), TOKEN_PROGRAM);
         params.input_mint = crate::constants::WSOL_TOKEN_ACCOUNT;
         params.create_input_mint_ata = true;
@@ -1120,7 +1141,7 @@ mod tests {
         }
 
         let business_instructions = build_buy(&params).unwrap();
-        let err = crate::trading::common::transaction_builder::build_transaction(
+        let transaction = crate::trading::common::transaction_builder::build_transaction(
             &params.payer,
             150_000,
             500_000,
@@ -1135,11 +1156,9 @@ mod tests {
             0.001,
             None,
         )
-        .unwrap_err()
-        .to_string();
-
-        assert!(err.contains("transaction too large"), "{err}");
-        assert!(err.contains("did not remove compute budget or relay tip"), "{err}");
+        .unwrap();
+        assert!(wincode::serialize(&transaction).unwrap().len() <= 1232);
+        assert_eq!(transaction.message.instructions().len(), business_instructions.len() + 3);
     }
 
     #[test]
@@ -1171,7 +1190,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let serialized = bincode::serialize(&transaction).unwrap();
+        let serialized = wincode::serialize(&transaction).unwrap();
 
         assert!(
             serialized.len() <= 1232,

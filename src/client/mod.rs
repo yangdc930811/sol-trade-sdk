@@ -4,7 +4,7 @@ use crate::common::nonce_cache::DurableNonceInfo;
 use crate::common::sdk_log;
 use crate::common::GasFeeStrategy;
 use crate::common::SolanaRpcClient;
-use crate::common::{InfrastructureConfig, TradeConfig};
+use crate::common::{InfrastructureConfig, TradeConfig, TradeTransactionVersion};
 #[cfg(feature = "perf-trace")]
 use crate::constants::trade::trade::DEFAULT_SLIPPAGE;
 use crate::constants::SOL_TOKEN_ACCOUNT;
@@ -16,13 +16,16 @@ use crate::swqos::SwqosClient;
 use crate::swqos::SwqosConfig;
 use crate::swqos::SwqosType;
 use crate::swqos::TradeType;
-use crate::trading::core::params::BonkParams;
 use crate::trading::core::params::DexParamEnum;
 use crate::trading::core::params::MeteoraDammV2Params;
+use crate::trading::core::params::MeteoraDlmmParams;
 use crate::trading::core::params::PumpFunParams;
 use crate::trading::core::params::PumpSwapParams;
 use crate::trading::core::params::RaydiumAmmV4Params;
+use crate::trading::core::params::RaydiumClmmParams;
 use crate::trading::core::params::RaydiumCpmmParams;
+use crate::trading::core::params::StonkFunViaSolParams;
+use crate::trading::core::params::WhirlpoolParams;
 use crate::trading::factory::DexType;
 use crate::trading::MiddlewareManager;
 use crate::trading::SwapParams;
@@ -43,11 +46,34 @@ fn validate_protocol_params(dex_type: DexType, params: &DexParamEnum) -> bool {
     match dex_type {
         DexType::PumpFun => params.as_any().downcast_ref::<PumpFunParams>().is_some(),
         DexType::PumpSwap => params.as_any().downcast_ref::<PumpSwapParams>().is_some(),
-        DexType::Bonk => params.as_any().downcast_ref::<BonkParams>().is_some(),
+        DexType::LaunchLab => matches!(params, DexParamEnum::LaunchLab(_)),
+        DexType::Bonk => matches!(params, DexParamEnum::Bonk(_)),
+        DexType::StonkFun => {
+            matches!(
+                params,
+                DexParamEnum::StonkFun(_)
+                    | DexParamEnum::StonkFunSwap(_)
+                    | DexParamEnum::StonkFunViaSol(_)
+                    | DexParamEnum::StonkFunQuoteRoute(_)
+            )
+        }
         DexType::RaydiumCpmm => params.as_any().downcast_ref::<RaydiumCpmmParams>().is_some(),
         DexType::RaydiumAmmV4 => params.as_any().downcast_ref::<RaydiumAmmV4Params>().is_some(),
         DexType::MeteoraDammV2 => params.as_any().downcast_ref::<MeteoraDammV2Params>().is_some(),
+        DexType::RaydiumClmm => params.as_any().downcast_ref::<RaydiumClmmParams>().is_some(),
+        DexType::OrcaWhirlpool => params.as_any().downcast_ref::<WhirlpoolParams>().is_some(),
+        DexType::MeteoraDlmm => params.as_any().downcast_ref::<MeteoraDlmmParams>().is_some(),
     }
+}
+
+/// Optional pre-buy gate for cached token/routing risk checks.
+///
+/// Implement this trait to plug in mint/freeze authority checks, holder/insider
+/// clustering, allowlists, or blocklists before the SDK builds and submits a buy
+/// transaction. Keep remote calls in a background refresher and make this method
+/// read only local state: it executes inline on the trade hot path.
+pub trait TradeRiskGate: Send + Sync {
+    fn check_buy(&self, params: &TradeBuyParams) -> Result<(), anyhow::Error>;
 }
 
 #[inline]
@@ -74,12 +100,26 @@ pub async fn find_pool_by_mint(
 }
 
 /// Type of the token to buy
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TradeTokenType {
     SOL,
     WSOL,
     USD1,
     USDC,
+    /// Any SPL Token or Token-2022 mint, including a StonkFun quote token.
+    Token(Pubkey),
+}
+
+impl TradeTokenType {
+    fn mint(self) -> Pubkey {
+        match self {
+            Self::SOL => SOL_TOKEN_ACCOUNT,
+            Self::WSOL => WSOL_TOKEN_ACCOUNT,
+            Self::USD1 => USD1_TOKEN_ACCOUNT,
+            Self::USDC => USDC_TOKEN_ACCOUNT,
+            Self::Token(mint) => mint,
+        }
+    }
 }
 
 /// Account lifecycle policy for high-level trade requests.
@@ -171,7 +211,8 @@ pub enum SellAmount {
 pub struct SimpleBuyParams {
     /// DEX/protocol to route through, such as `DexType::PumpFun`.
     pub dex_type: DexType,
-    /// Quote token used to pay for the buy: `SOL`, `WSOL`, `USDC`, or `USD1`.
+    /// Quote token used to pay for the buy. Use [`TradeTokenType::Token`] for an
+    /// arbitrary SPL Token or Token-2022 quote mint.
     ///
     /// For PumpFun SOL-paired coins, use `TradeTokenType::SOL` for the normal
     /// fast path even when parser data reports WSOL as the quote sentinel. The
@@ -222,7 +263,8 @@ pub struct SimpleBuyParams {
 pub struct SimpleSellParams {
     /// DEX/protocol to route through, such as `DexType::PumpFun`.
     pub dex_type: DexType,
-    /// Quote token to receive from the sell: `SOL`, `WSOL`, `USDC`, or `USD1`.
+    /// Quote token to receive from the sell. Use [`TradeTokenType::Token`] for
+    /// an arbitrary SPL Token or Token-2022 quote mint.
     pub receive_as: TradeTokenType,
     /// Mint address of the token being sold.
     pub mint: Pubkey,
@@ -376,6 +418,62 @@ impl SimpleBuyParams {
         self.grpc_recv_us = Some(value);
         self
     }
+
+    /// Buy a StonkFun meme with native SOL when the pool is priced in a stock quote.
+    ///
+    /// Sets `dex_type = StonkFun`, `pay_with = SOL`, and wraps `via` as
+    /// [`DexParamEnum::StonkFunViaSol`]. Keep the default [`AccountPolicy::Auto`]
+    /// for first-time wallets; bots should chain
+    /// `.account_policy(AccountPolicy::HotPathMinimal)` after pre-creating ATAs.
+    ///
+    /// ```ignore
+    /// let via = StonkFunViaSolParams::curve_with_cpmm(curve, wsol_stock_pool);
+    /// let params = SimpleBuyParams::stonkfun_with_sol(
+    ///     meme_mint,
+    ///     BuyAmount::ExactInput(100_000_000),
+    ///     via,
+    ///     recent_blockhash,
+    ///     gas,
+    /// );
+    /// ```
+    pub fn stonkfun_with_sol(
+        mint: Pubkey,
+        amount: BuyAmount,
+        via: StonkFunViaSolParams,
+        recent_blockhash: Hash,
+        gas_fee_strategy: GasFeeStrategy,
+    ) -> Self {
+        Self::stonkfun_with_token(
+            mint,
+            TradeTokenType::SOL,
+            amount,
+            via,
+            recent_blockhash,
+            gas_fee_strategy,
+        )
+    }
+
+    /// Buy using SOL, existing WSOL, USDC or the pool's quote token. Only native SOL is wrapped;
+    /// WSOL spends the wallet's existing token balance. Funding pools/quotes
+    /// must match the selected asset. No router contract is invoked.
+    pub fn stonkfun_with_token(
+        mint: Pubkey,
+        pay_with: TradeTokenType,
+        amount: BuyAmount,
+        via: StonkFunViaSolParams,
+        recent_blockhash: Hash,
+        gas_fee_strategy: GasFeeStrategy,
+    ) -> Self {
+        Self::new(
+            DexType::StonkFun,
+            pay_with,
+            mint,
+            amount,
+            via.into_extension(),
+            recent_blockhash,
+            gas_fee_strategy,
+        )
+    }
 }
 
 impl SimpleSellParams {
@@ -501,6 +599,50 @@ impl SimpleSellParams {
     pub fn grpc_recv_us(mut self, value: i64) -> Self {
         self.grpc_recv_us = Some(value);
         self
+    }
+
+    /// Sell a StonkFun meme back to native SOL when the pool is priced in a stock quote.
+    ///
+    /// Sets `dex_type = StonkFun`, `receive_as = SOL`, and wraps `via` as
+    /// [`DexParamEnum::StonkFunViaSol`]. With [`AccountPolicy::Auto`], WSOL is
+    /// created if needed and closed at the end so the wallet receives native SOL;
+    /// stock-quote ATAs stay open for reuse.
+    pub fn stonkfun_to_sol(
+        mint: Pubkey,
+        amount: SellAmount,
+        via: StonkFunViaSolParams,
+        recent_blockhash: Hash,
+        gas_fee_strategy: GasFeeStrategy,
+    ) -> Self {
+        Self::stonkfun_to_token(
+            mint,
+            TradeTokenType::SOL,
+            amount,
+            via,
+            recent_blockhash,
+            gas_fee_strategy,
+        )
+    }
+
+    /// Sell into SOL, WSOL, USDC or the pool's quote token. Under Auto, SOL closes WSOL at the end;
+    /// WSOL and USDC stay in their token accounts.
+    pub fn stonkfun_to_token(
+        mint: Pubkey,
+        receive_as: TradeTokenType,
+        amount: SellAmount,
+        via: StonkFunViaSolParams,
+        recent_blockhash: Hash,
+        gas_fee_strategy: GasFeeStrategy,
+    ) -> Self {
+        Self::new(
+            DexType::StonkFun,
+            receive_as,
+            mint,
+            amount,
+            via.into_extension(),
+            recent_blockhash,
+            gas_fee_strategy,
+        )
     }
 }
 
@@ -729,6 +871,9 @@ pub struct TradingClient {
     pub infrastructure: Arc<TradingInfrastructure>,
     /// Optional middleware manager for custom transaction processing
     pub middleware_manager: Option<Arc<MiddlewareManager>>,
+    /// Optional pre-buy risk gate. When present, buy requests must pass this
+    /// cached check before transaction construction/submission.
+    pub risk_gate: Option<Arc<dyn TradeRiskGate>>,
     /// Whether to use seed optimization for all ATA operations (default: true)
     /// Applies to all token account creations across buy and sell operations
     pub use_seed_optimize: bool,
@@ -744,6 +889,8 @@ pub struct TradingClient {
     pub log_enabled: bool,
     /// Whether to check minimum tip per SWQOS (from TradeConfig.check_min_tip). Default false for lower latency.
     pub check_min_tip: bool,
+    /// Solana transaction construction mode selected in `TradeConfig`.
+    pub transaction_version: TradeTransactionVersion,
 }
 
 static INSTANCE: Mutex<Option<Arc<TradingClient>>> = Mutex::new(None);
@@ -757,6 +904,7 @@ impl Clone for TradingClient {
             payer: self.payer.clone(),
             infrastructure: self.infrastructure.clone(),
             middleware_manager: self.middleware_manager.clone(),
+            risk_gate: self.risk_gate.clone(),
             use_seed_optimize: self.use_seed_optimize,
             use_dedicated_sender_threads: self.use_dedicated_sender_threads,
             sender_thread_cores: self.sender_thread_cores.clone(),
@@ -764,6 +912,7 @@ impl Clone for TradingClient {
             effective_core_ids: self.effective_core_ids.clone(),
             log_enabled: self.log_enabled,
             check_min_tip: self.check_min_tip,
+            transaction_version: self.transaction_version,
         }
     }
 }
@@ -888,6 +1037,21 @@ fn buy_account_flags(policy: AccountPolicy) -> (bool, bool, bool) {
     }
 }
 
+/// ViaSol Auto: first-time users should get WSOL + meme ATAs created, but WSOL
+/// must stay open across buys so stock-quote hops stay cheap.
+#[inline]
+fn buy_account_flags_for(policy: AccountPolicy, extension: &DexParamEnum) -> (bool, bool, bool) {
+    if matches!(policy, AccountPolicy::Auto)
+        && matches!(
+            extension,
+            DexParamEnum::StonkFunViaSol(_) | DexParamEnum::StonkFunQuoteRoute(_)
+        )
+    {
+        return (true, true, false);
+    }
+    buy_account_flags(policy)
+}
+
 #[inline]
 fn sell_account_flags(policy: AccountPolicy, receive_as: &TradeTokenType) -> (bool, bool, bool) {
     match policy {
@@ -895,6 +1059,27 @@ fn sell_account_flags(policy: AccountPolicy, receive_as: &TradeTokenType) -> (bo
         AccountPolicy::HotPathMinimal | AccountPolicy::AssumePrepared => (false, false, false),
         AccountPolicy::CreateMissing => (true, false, false),
     }
+}
+
+/// ViaSol Auto sell to SOL: create WSOL if missing, unwrap to native SOL for a
+/// normal wallet balance, and never close the meme ATA by default.
+#[inline]
+fn sell_account_flags_for(
+    policy: AccountPolicy,
+    receive_as: &TradeTokenType,
+    extension: &DexParamEnum,
+) -> (bool, bool, bool) {
+    if matches!(policy, AccountPolicy::Auto)
+        && matches!(
+            extension,
+            DexParamEnum::StonkFunViaSol(_) | DexParamEnum::StonkFunQuoteRoute(_)
+        )
+        && matches!(receive_as, TradeTokenType::SOL | TradeTokenType::WSOL)
+    {
+        // (create_output, close_output, close_mint)
+        return (true, matches!(receive_as, TradeTokenType::SOL), false);
+    }
+    sell_account_flags(policy, receive_as)
 }
 
 impl From<SimpleBuyParams> for TradeBuyParams {
@@ -908,7 +1093,7 @@ impl From<SimpleBuyParams> for TradeBuyParams {
                 BuyAmount::WithMaxInput { quote_amount } => (quote_amount, None, Some(false)),
             };
         let (create_input_token_ata, create_mint_ata, close_input_token_ata) =
-            buy_account_flags(params.account_policy);
+            buy_account_flags_for(params.account_policy, &params.extension_params);
 
         TradeBuyParams {
             dex_type: params.dex_type,
@@ -943,7 +1128,11 @@ impl From<SimpleSellParams> for TradeSellParams {
             }
         };
         let (create_output_token_ata, close_output_token_ata, close_mint_token_ata) =
-            sell_account_flags(params.account_policy, &params.receive_as);
+            sell_account_flags_for(
+                params.account_policy,
+                &params.receive_as,
+                &params.extension_params,
+            );
 
         TradeSellParams {
             dex_type: params.dex_type,
@@ -997,13 +1186,15 @@ impl TradingClient {
             payer,
             infrastructure,
             middleware_manager: None,
+            risk_gate: None,
             use_seed_optimize,
             use_dedicated_sender_threads: false,
             sender_thread_cores: None,
             max_sender_concurrency,
             effective_core_ids,
-            log_enabled: true,
+            log_enabled: false,
             check_min_tip: false,
+            transaction_version: TradeTransactionVersion::V0,
         }
     }
 
@@ -1043,13 +1234,15 @@ impl TradingClient {
             payer,
             infrastructure,
             middleware_manager: None,
+            risk_gate: None,
             use_seed_optimize,
             use_dedicated_sender_threads: false,
             sender_thread_cores: None,
             max_sender_concurrency,
             effective_core_ids,
-            log_enabled: true,
+            log_enabled: false,
             check_min_tip: false,
+            transaction_version: TradeTransactionVersion::V0,
         }
     }
 
@@ -1157,7 +1350,6 @@ impl TradingClient {
                 error!(target: "sol_trade_sdk", "   💡 Possible causes: insufficient SOL, RPC timeout, or fee");
                 error!(target: "sol_trade_sdk", "   🔧 Solutions: fund wallet (e.g. 0.1 SOL), retry, check RPC");
             }
-            std::thread::sleep(std::time::Duration::from_secs(5));
             panic!(
                 "❌ WSOL ATA creation failed and account does not exist: {}. Error: {}",
                 wsol_ata, err
@@ -1222,6 +1414,7 @@ impl TradingClient {
             payer,
             infrastructure: infrastructure.clone(),
             middleware_manager: None,
+            risk_gate: None,
             use_seed_optimize: trade_config.use_seed_optimize,
             use_dedicated_sender_threads: false,
             sender_thread_cores: None,
@@ -1229,6 +1422,7 @@ impl TradingClient {
             effective_core_ids: infrastructure.effective_core_ids.clone(),
             log_enabled: trade_config.log_enabled,
             check_min_tip: trade_config.check_min_tip,
+            transaction_version: trade_config.transaction_version,
         };
 
         let mut current = INSTANCE.lock();
@@ -1249,6 +1443,23 @@ impl TradingClient {
     /// Returns the modified SolanaTrade instance with middleware manager attached
     pub fn with_middleware_manager(mut self, middleware_manager: MiddlewareManager) -> Self {
         self.middleware_manager = Some(Arc::new(middleware_manager));
+        self
+    }
+
+    /// Adds a pre-buy risk gate.
+    ///
+    /// The gate runs after basic parameter validation and before instruction
+    /// construction/submission. The callback is synchronous by design; use only
+    /// local cached state and refresh network-backed data outside the hot path.
+    pub fn with_risk_gate(mut self, risk_gate: Arc<dyn TradeRiskGate>) -> Self {
+        self.risk_gate = Some(risk_gate);
+        self
+    }
+
+    /// Select the transaction message version for a client created from shared infrastructure.
+    /// `V0` preserves the existing behavior: Legacy without ALTs and V0 with ALTs.
+    pub fn with_transaction_version(mut self, version: TradeTransactionVersion) -> Self {
+        self.transaction_version = version;
         self
     }
 
@@ -1367,27 +1578,17 @@ impl TradingClient {
                 DEFAULT_SLIPPAGE
             );
         }
-        if params.input_token_type == TradeTokenType::USD1 && params.dex_type != DexType::Bonk {
-            return Err(anyhow::anyhow!(
-                " Current version only supports USD1 trading on Bonk protocols"
-            ));
-        }
-        let protocol_params = params.extension_params;
-        if !validate_protocol_params(params.dex_type, &protocol_params) {
+        if !validate_protocol_params(params.dex_type, &params.extension_params) {
             return Err(anyhow::anyhow!(
                 "Invalid protocol params for Trade (dex={:?})",
                 params.dex_type
             ));
         }
-        let input_token_mint = if params.input_token_type == TradeTokenType::SOL {
-            SOL_TOKEN_ACCOUNT
-        } else if params.input_token_type == TradeTokenType::WSOL {
-            WSOL_TOKEN_ACCOUNT
-        } else if params.input_token_type == TradeTokenType::USDC {
-            USDC_TOKEN_ACCOUNT
-        } else {
-            USD1_TOKEN_ACCOUNT
-        };
+        if let Some(risk_gate) = self.risk_gate.as_deref() {
+            risk_gate.check_buy(&params)?;
+        }
+        let protocol_params = params.extension_params;
+        let input_token_mint = params.input_token_type.mint();
         let executor = TradeFactory::create_executor(params.dex_type);
         let buy_params = SwapParams {
             rpc: Some(self.infrastructure.rpc.clone()),
@@ -1422,6 +1623,7 @@ impl TradingClient {
             max_sender_concurrency: self.max_sender_concurrency,
             effective_core_ids: self.effective_core_ids.clone(),
             check_min_tip: self.check_min_tip,
+            transaction_version: self.transaction_version,
             grpc_recv_us: params.grpc_recv_us,
             use_exact_sol_amount: params.use_exact_sol_amount,
         };
@@ -1501,11 +1703,6 @@ impl TradingClient {
                 "Must provide either recent_blockhash or durable_nonce for sell (required for transaction validity)"
             ));
         }
-        if params.output_token_type == TradeTokenType::USD1 && params.dex_type != DexType::Bonk {
-            return Err(anyhow::anyhow!(
-                " Current version only supports USD1 trading on Bonk protocols"
-            ));
-        }
         let protocol_params = params.extension_params;
         if !validate_protocol_params(params.dex_type, &protocol_params) {
             return Err(anyhow::anyhow!(
@@ -1514,15 +1711,7 @@ impl TradingClient {
             ));
         }
         let executor = TradeFactory::create_executor(params.dex_type);
-        let output_token_mint = if params.output_token_type == TradeTokenType::SOL {
-            SOL_TOKEN_ACCOUNT
-        } else if params.output_token_type == TradeTokenType::WSOL {
-            WSOL_TOKEN_ACCOUNT
-        } else if params.output_token_type == TradeTokenType::USDC {
-            USDC_TOKEN_ACCOUNT
-        } else {
-            USD1_TOKEN_ACCOUNT
-        };
+        let output_token_mint = params.output_token_type.mint();
         let sell_params = SwapParams {
             rpc: Some(self.infrastructure.rpc.clone()),
             payer: self.payer.clone(),
@@ -1556,6 +1745,7 @@ impl TradingClient {
             max_sender_concurrency: self.max_sender_concurrency,
             effective_core_ids: self.effective_core_ids.clone(),
             check_min_tip: self.check_min_tip,
+            transaction_version: self.transaction_version,
             grpc_recv_us: params.grpc_recv_us,
             use_exact_sol_amount: None,
         };
@@ -1861,6 +2051,7 @@ mod tests {
     use super::*;
     use crate::instruction::utils::pumpfun::global_constants;
     use crate::swqos::SwqosRegion;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     fn dummy_pumpfun_params() -> DexParamEnum {
@@ -1893,7 +2084,7 @@ mod tests {
 
     #[test]
     fn normalize_swqos_configs_adds_default_rpc_route() {
-        let configs = vec![SwqosConfig::Jito("uuid".to_string(), SwqosRegion::Frankfurt, None)];
+        let configs = vec![SwqosConfig::Jito("uuid".to_string(), SwqosRegion::Frankfurt, None, None)];
         let normalized = normalize_swqos_configs("https://rpc.example", &configs);
 
         assert_eq!(normalized.len(), 2);
@@ -1968,6 +2159,140 @@ mod tests {
         assert_eq!(low.use_exact_sol_amount, Some(true));
         assert!(low.create_mint_ata);
         assert!(!low.create_input_token_ata);
+    }
+
+    #[test]
+    fn stonkfun_asset_helpers_preserve_payment_receipt_and_auto_account_policy() {
+        let meme = Pubkey::new_unique();
+        let stock = Pubkey::new_unique();
+        let mut curve = crate::trading::core::params::BonkParams::default();
+        curve.quote_mint = stock;
+        let via = StonkFunViaSolParams::curve_direct(curve);
+        for asset in [
+            TradeTokenType::SOL,
+            TradeTokenType::WSOL,
+            TradeTokenType::USDC,
+            TradeTokenType::Token(stock),
+        ] {
+            let buy: TradeBuyParams = SimpleBuyParams::stonkfun_with_token(
+                meme,
+                asset,
+                BuyAmount::ExactInput(100),
+                via.clone(),
+                Hash::new_unique(),
+                GasFeeStrategy::new(),
+            )
+            .into();
+            assert_eq!(buy.input_token_type, asset);
+            assert!(buy.create_input_token_ata);
+            assert!(!buy.close_input_token_ata);
+            let sell: TradeSellParams = SimpleSellParams::stonkfun_to_token(
+                meme,
+                asset,
+                SellAmount::ExactInput(100),
+                via.clone(),
+                Hash::new_unique(),
+                GasFeeStrategy::new(),
+            )
+            .into();
+            assert_eq!(sell.output_token_type, asset);
+            assert!(sell.create_output_token_ata);
+            assert_eq!(sell.close_output_token_ata, asset == TradeTokenType::SOL);
+        }
+    }
+    #[test]
+    fn stonkfun_with_sol_helper_uses_via_sol_auto_ata_policy() {
+        use crate::trading::core::params::{BonkParams, RaydiumCpmmParams, StonkFunViaSolParams};
+
+        let stock = Pubkey::new_from_array([40; 32]);
+        let meme = Pubkey::new_unique();
+        let mut curve = BonkParams::default();
+        curve.quote_mint = stock;
+        let sol_hop = RaydiumCpmmParams {
+            pool_state: Pubkey::new_from_array([1; 32]),
+            amm_config: Pubkey::new_from_array([2; 32]),
+            base_mint: crate::constants::WSOL_TOKEN_ACCOUNT,
+            quote_mint: stock,
+            base_reserve: 1,
+            quote_reserve: 1,
+            base_vault: Pubkey::new_from_array([3; 32]),
+            quote_vault: Pubkey::new_from_array([4; 32]),
+            base_token_program: crate::constants::TOKEN_PROGRAM,
+            quote_token_program: crate::constants::TOKEN_PROGRAM,
+            observation_state: Pubkey::new_from_array([5; 32]),
+            trade_fee_rate: 2500,
+            protocol_fee_rate: 0,
+            fund_fee_rate: 0,
+            creator_fee_rate: 0,
+            creator_fee_on: 0,
+            enable_creator_fee: false,
+            base_transfer_fee: Default::default(),
+            quote_transfer_fee: Default::default(),
+        };
+        let via = StonkFunViaSolParams::curve_with_cpmm(curve, sol_hop);
+        let simple = SimpleBuyParams::stonkfun_with_sol(
+            meme,
+            BuyAmount::ExactInput(1_000_000),
+            via,
+            Hash::new_unique(),
+            GasFeeStrategy::new(),
+        );
+
+        assert_eq!(simple.dex_type, DexType::StonkFun);
+        assert!(matches!(simple.pay_with, TradeTokenType::SOL));
+        assert!(matches!(simple.extension_params, DexParamEnum::StonkFunViaSol(_)));
+
+        let low: TradeBuyParams = simple.into();
+        // Auto + ViaSol: create WSOL and meme ATA, never close WSOL.
+        assert!(low.create_input_token_ata);
+        assert!(low.create_mint_ata);
+        assert!(!low.close_input_token_ata);
+    }
+
+    #[test]
+    fn stonkfun_to_sol_helper_unwraps_wsol_under_auto() {
+        use crate::trading::core::params::{BonkParams, RaydiumCpmmParams, StonkFunViaSolParams};
+
+        let stock = Pubkey::new_from_array([50; 32]);
+        let mut curve = BonkParams::default();
+        curve.quote_mint = stock;
+        let sol_hop = RaydiumCpmmParams {
+            pool_state: Pubkey::new_from_array([1; 32]),
+            amm_config: Pubkey::new_from_array([2; 32]),
+            base_mint: crate::constants::WSOL_TOKEN_ACCOUNT,
+            quote_mint: stock,
+            base_reserve: 1,
+            quote_reserve: 1,
+            base_vault: Pubkey::new_from_array([3; 32]),
+            quote_vault: Pubkey::new_from_array([4; 32]),
+            base_token_program: crate::constants::TOKEN_PROGRAM,
+            quote_token_program: crate::constants::TOKEN_PROGRAM,
+            observation_state: Pubkey::new_from_array([5; 32]),
+            trade_fee_rate: 2500,
+            protocol_fee_rate: 0,
+            fund_fee_rate: 0,
+            creator_fee_rate: 0,
+            creator_fee_on: 0,
+            enable_creator_fee: false,
+            base_transfer_fee: Default::default(),
+            quote_transfer_fee: Default::default(),
+        };
+        let via = StonkFunViaSolParams::curve_with_cpmm(curve, sol_hop);
+        let simple = SimpleSellParams::stonkfun_to_sol(
+            Pubkey::new_unique(),
+            SellAmount::ExactInput(1_000_000),
+            via,
+            Hash::new_unique(),
+            GasFeeStrategy::new(),
+        );
+
+        assert_eq!(simple.dex_type, DexType::StonkFun);
+        assert!(matches!(simple.receive_as, TradeTokenType::SOL));
+
+        let low: TradeSellParams = simple.into();
+        assert!(low.create_output_token_ata);
+        assert!(low.close_output_token_ata);
+        assert!(!low.close_mint_token_ata);
     }
 
     #[test]
@@ -2104,5 +2429,145 @@ mod tests {
         assert!(low.recent_blockhash.is_none());
         assert_eq!(low.durable_nonce.as_ref().and_then(|n| n.nonce_account), Some(nonce_account));
         assert_eq!(low.durable_nonce.as_ref().and_then(|n| n.current_nonce), Some(nonce_hash));
+    }
+
+    struct RejectingRiskGate {
+        calls: AtomicUsize,
+    }
+
+    impl TradeRiskGate for RejectingRiskGate {
+        fn check_buy(&self, params: &TradeBuyParams) -> Result<(), anyhow::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(anyhow::anyhow!("blocked mint {}", params.mint))
+        }
+    }
+
+    #[tokio::test]
+    async fn buy_calls_risk_gate_before_submit() {
+        let infra = Arc::new(TradingInfrastructure {
+            rpc: Arc::new(SolanaRpcClient::new("https://example.invalid".to_string())),
+            swqos_clients: Arc::new(Vec::new()),
+            config: InfrastructureConfig::new(
+                "https://example.invalid".to_string(),
+                Vec::new(),
+                solana_commitment_config::CommitmentConfig::processed(),
+            ),
+            max_sender_concurrency: 1,
+            effective_core_ids: Arc::new(Vec::new()),
+        });
+        let gate = Arc::new(RejectingRiskGate { calls: AtomicUsize::new(0) });
+        let client = TradingClient::from_infrastructure(Arc::new(Keypair::new()), infra, true)
+            .with_risk_gate(gate.clone());
+
+        let err = client
+            .buy(TradeBuyParams {
+                dex_type: DexType::PumpFun,
+                input_token_type: TradeTokenType::SOL,
+                mint: Pubkey::new_unique(),
+                input_token_amount: 10_000,
+                slippage_basis_points: Some(100),
+                recent_blockhash: Some(Hash::new_unique()),
+                extension_params: dummy_pumpfun_params(),
+                address_lookup_table_accounts: Vec::new(),
+                wait_tx_confirmed: false,
+                wait_for_all_submits: false,
+                create_input_token_ata: false,
+                close_input_token_ata: false,
+                create_mint_ata: false,
+                durable_nonce: None,
+                fixed_output_token_amount: None,
+                gas_fee_strategy: GasFeeStrategy::new(),
+                simulate: false,
+                use_exact_sol_amount: Some(true),
+                grpc_recv_us: None,
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("blocked mint"), "{err}");
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn buy_simple_uses_the_same_risk_gate() {
+        let infra = Arc::new(TradingInfrastructure {
+            rpc: Arc::new(SolanaRpcClient::new("https://example.invalid".to_string())),
+            swqos_clients: Arc::new(Vec::new()),
+            config: InfrastructureConfig::new(
+                "https://example.invalid".to_string(),
+                Vec::new(),
+                solana_commitment_config::CommitmentConfig::processed(),
+            ),
+            max_sender_concurrency: 1,
+            effective_core_ids: Arc::new(Vec::new()),
+        });
+        let gate = Arc::new(RejectingRiskGate { calls: AtomicUsize::new(0) });
+        let client = TradingClient::from_infrastructure(Arc::new(Keypair::new()), infra, true)
+            .with_risk_gate(gate.clone());
+
+        let err = client
+            .buy_simple(SimpleBuyParams::new(
+                DexType::PumpFun,
+                TradeTokenType::SOL,
+                Pubkey::new_unique(),
+                BuyAmount::ExactInput(10_000),
+                dummy_pumpfun_params(),
+                Hash::new_unique(),
+                GasFeeStrategy::new(),
+            ))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("blocked mint"), "{err}");
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn buy_validates_before_calling_risk_gate() {
+        let infra = Arc::new(TradingInfrastructure {
+            rpc: Arc::new(SolanaRpcClient::new("https://example.invalid".to_string())),
+            swqos_clients: Arc::new(Vec::new()),
+            config: InfrastructureConfig::new(
+                "https://example.invalid".to_string(),
+                Vec::new(),
+                solana_commitment_config::CommitmentConfig::processed(),
+            ),
+            max_sender_concurrency: 1,
+            effective_core_ids: Arc::new(Vec::new()),
+        });
+        let gate = Arc::new(RejectingRiskGate { calls: AtomicUsize::new(0) });
+        let client = TradingClient::from_infrastructure(Arc::new(Keypair::new()), infra, true)
+            .with_risk_gate(gate.clone());
+
+        let err = client
+            .buy(TradeBuyParams {
+                dex_type: DexType::PumpFun,
+                input_token_type: TradeTokenType::SOL,
+                mint: Pubkey::new_unique(),
+                input_token_amount: 0,
+                slippage_basis_points: Some(100),
+                recent_blockhash: Some(Hash::new_unique()),
+                extension_params: dummy_pumpfun_params(),
+                address_lookup_table_accounts: Vec::new(),
+                wait_tx_confirmed: false,
+                wait_for_all_submits: false,
+                create_input_token_ata: false,
+                close_input_token_ata: false,
+                create_mint_ata: false,
+                durable_nonce: None,
+                fixed_output_token_amount: None,
+                gas_fee_strategy: GasFeeStrategy::new(),
+                simulate: false,
+                use_exact_sol_amount: Some(true),
+                grpc_recv_us: None,
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("input amount must be greater than zero"), "{err}");
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
 }

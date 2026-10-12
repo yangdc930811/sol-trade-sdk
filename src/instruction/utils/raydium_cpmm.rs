@@ -1,6 +1,9 @@
 use crate::{
     common::SolanaRpcClient,
-    instruction::utils::raydium_cpmm_types::{pool_state_decode, PoolState},
+    instruction::utils::raydium_cpmm_types::{
+        amm_config_decode, pool_state_decode, AmmConfig, PoolState, AMM_CONFIG_DISCRIMINATOR,
+        AMM_CONFIG_SIZE, POOL_STATE_DISCRIMINATOR, POOL_STATE_SIZE,
+    },
     trading::core::params::RaydiumCpmmParams,
 };
 use anyhow::anyhow;
@@ -43,9 +46,49 @@ pub async fn fetch_pool_state(
     if account.owner != accounts::RAYDIUM_CPMM {
         return Err(anyhow!("Account is not owned by Raydium Cpmm program"));
     }
+    let expected_len = 8 + POOL_STATE_SIZE;
+    if account.data.len() < expected_len {
+        return Err(anyhow!(
+            "Raydium CPMM pool account is too short: expected at least {}, got {}",
+            expected_len,
+            account.data.len()
+        ));
+    }
+    if account.data[..8] != POOL_STATE_DISCRIMINATOR {
+        return Err(anyhow!("Account discriminator is not Raydium CPMM PoolState"));
+    }
     let pool_state = pool_state_decode(&account.data[8..])
         .ok_or_else(|| anyhow!("Failed to decode pool state"))?;
     Ok(pool_state)
+}
+
+pub async fn fetch_amm_config(
+    rpc: &SolanaRpcClient,
+    config_address: &Pubkey,
+) -> Result<AmmConfig, anyhow::Error> {
+    let account = rpc.get_account(config_address).await?;
+    decode_amm_config_account(&account)
+}
+
+fn decode_amm_config_account(
+    account: &solana_sdk::account::Account,
+) -> Result<AmmConfig, anyhow::Error> {
+    if account.owner != accounts::RAYDIUM_CPMM {
+        return Err(anyhow!("Account is not owned by Raydium CPMM program"));
+    }
+    let expected_len = 8 + AMM_CONFIG_SIZE;
+    if account.data.len() < expected_len {
+        return Err(anyhow!(
+            "Raydium CPMM config account is too short: expected at least {}, got {}",
+            expected_len,
+            account.data.len()
+        ));
+    }
+    if account.data[..8] != AMM_CONFIG_DISCRIMINATOR {
+        return Err(anyhow!("Account discriminator is not Raydium CPMM AmmConfig"));
+    }
+    amm_config_decode(&account.data[8..])
+        .ok_or_else(|| anyhow!("Failed to decode Raydium CPMM config"))
 }
 
 pub fn get_pool_pda(amm_config: &Pubkey, mint1: &Pubkey, mint2: &Pubkey) -> Option<Pubkey> {
@@ -80,23 +123,23 @@ pub async fn get_pool_token_balances(
     token0_mint: &Pubkey,
     token1_mint: &Pubkey,
 ) -> Result<(u64, u64), anyhow::Error> {
-    let token0_vault = get_vault_pda(pool_state, token0_mint).unwrap();
-    let token0_balance = rpc.get_token_account_balance(&token0_vault).await?;
-    let token1_vault = get_vault_pda(pool_state, token1_mint).unwrap();
-    let token1_balance = rpc.get_token_account_balance(&token1_vault).await?;
+    let token0_vault = get_vault_pda(pool_state, token0_mint)
+        .ok_or_else(|| anyhow!("Failed to derive Raydium CPMM token0 vault"))?;
+    let token1_vault = get_vault_pda(pool_state, token1_mint)
+        .ok_or_else(|| anyhow!("Failed to derive Raydium CPMM token1 vault"))?;
+    get_pool_token_balances_from_vaults(rpc, &token0_vault, &token1_vault).await
+}
 
-    // Parse balance string to u64
-    let token0_amount = token0_balance
-        .amount
-        .parse::<u64>()
-        .map_err(|e| anyhow!("Failed to parse token0 balance: {}", e))?;
-
-    let token1_amount = token1_balance
-        .amount
-        .parse::<u64>()
-        .map_err(|e| anyhow!("Failed to parse token1 balance: {}", e))?;
-
-    Ok((token0_amount, token1_amount))
+/// Reads pool balances from the vault addresses stored in PoolState.
+///
+/// Prefer `getMultipleAccounts` over `getTokenAccountBalance` so public RPCs
+/// that gate indexed methods (PublicNode/Allnodes) still work.
+pub async fn get_pool_token_balances_from_vaults(
+    rpc: &SolanaRpcClient,
+    token0_vault: &Pubkey,
+    token1_vault: &Pubkey,
+) -> Result<(u64, u64), anyhow::Error> {
+    crate::trading::common::get_multi_token_balances(rpc, token0_vault, token1_vault).await
 }
 
 /// Calculate token price (token1/token0)
@@ -132,14 +175,116 @@ pub fn get_vault_account(
     pool_state: &Pubkey,
     token_mint: &Pubkey,
     protocol_params: &RaydiumCpmmParams,
-) -> Pubkey {
+) -> Result<Pubkey, anyhow::Error> {
     if protocol_params.base_mint == *token_mint && protocol_params.base_vault != Pubkey::default() {
-        protocol_params.base_vault
+        Ok(protocol_params.base_vault)
     } else if protocol_params.quote_mint == *token_mint
         && protocol_params.quote_vault != Pubkey::default()
     {
-        protocol_params.quote_vault
+        Ok(protocol_params.quote_vault)
     } else {
-        get_vault_pda(pool_state, token_mint).unwrap()
+        get_vault_pda(pool_state, token_mint)
+            .ok_or_else(|| anyhow!("Failed to derive Raydium CPMM vault"))
     }
+}
+
+/// Always include this PDA in collection instructions, even when it is absent on-chain.
+pub fn get_creator_fee_share_pda(creator: &Pubkey, amm_config: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[b"creator_fee_share", creator.as_ref(), amm_config.as_ref()],
+        &accounts::RAYDIUM_CPMM,
+    )
+    .0
+}
+
+/// Resolve the current collection-time rate. Only a missing/empty or foreign-owned
+/// account falls back to AmmConfig; malformed CPMM accounts are errors.
+/// Config and override are fetched together from the same confirmed bank snapshot.
+pub async fn fetch_creator_fee_share_rate(
+    rpc: &SolanaRpcClient,
+    creator: &Pubkey,
+    config_address: &Pubkey,
+) -> Result<u64, anyhow::Error> {
+    let address = get_creator_fee_share_pda(creator, config_address);
+    // One bank snapshot avoids mixing config and override values from separate reads.
+    let response = rpc
+        .get_multiple_accounts_with_commitment(
+            &[*config_address, address],
+            solana_commitment_config::CommitmentConfig::confirmed(),
+        )
+        .await?;
+    if response.value.len() != 2 {
+        return Err(anyhow!("Incomplete Raydium CPMM fee-share snapshot"));
+    }
+    let config_account = response.value[0]
+        .as_ref()
+        .ok_or_else(|| anyhow!("Raydium CPMM AmmConfig account is missing"))?;
+    let config = decode_amm_config_account(config_account)?;
+    resolve_creator_fee_share_rate(&config, creator, config_address, response.value[1].as_ref())
+}
+
+/// Resolve a fetched share account with the same missing-account fallback as the program.
+/// Zero-lamport observations are closed, even if the source retains old data bytes.
+pub fn resolve_creator_fee_share_rate(
+    config: &AmmConfig,
+    creator: &Pubkey,
+    config_address: &Pubkey,
+    share_account: Option<&solana_sdk::account::Account>,
+) -> Result<u64, anyhow::Error> {
+    resolve_creator_fee_share_rate_from_data(
+        config,
+        creator,
+        config_address,
+        share_account.map(|account| {
+            let data = if account.lamports == 0 { &[][..] } else { account.data.as_slice() };
+            (account.owner, data)
+        }),
+    )
+}
+
+/// Borrow subscription bytes without cloning an account on the preparation path.
+pub(crate) fn resolve_creator_fee_share_rate_from_data(
+    config: &AmmConfig,
+    creator: &Pubkey,
+    config_address: &Pubkey,
+    share_account: Option<(Pubkey, &[u8])>,
+) -> Result<u64, anyhow::Error> {
+    use crate::instruction::utils::raydium_cpmm_types::creator_fee_share_decode;
+    let rate = match share_account {
+        Some((owner, data)) if owner == accounts::RAYDIUM_CPMM && !data.is_empty() => {
+            let share = creator_fee_share_decode(data)
+                .ok_or_else(|| anyhow!("Invalid Raydium CPMM CreatorFeeShare account"))?;
+            if share.creator != *creator || share.amm_config != *config_address {
+                return Err(anyhow!("CreatorFeeShare creator/config mismatch"));
+            }
+            share.share_rate
+        }
+        _ => config.creator_fee_share_rate,
+    };
+    if rate > 1_000_000 {
+        return Err(anyhow!("Creator fee share rate exceeds 1,000,000"));
+    }
+    Ok(rate)
+}
+
+/// Returns (creator payout, protocol share), before any Token-2022 transfer fee.
+/// The protocol share rounds down; remaining dust belongs to the creator.
+pub fn split_creator_fee(creator_fee: u64, share_rate: u64) -> Result<(u64, u64), anyhow::Error> {
+    if share_rate > 1_000_000 {
+        return Err(anyhow!("Creator fee share rate exceeds 1,000,000"));
+    }
+    let protocol = (u128::from(creator_fee) * u128::from(share_rate) / 1_000_000) as u64;
+    Ok((creator_fee - protocol, protocol))
+}
+
+/// Estimate both creator payouts using a freshly resolved collection-time rate.
+/// Pool counters are gross accrued fees; protocol counters also grow on collection.
+pub fn estimate_creator_fee_payout(
+    pool: &PoolState,
+    share_rate: u64,
+) -> Result<(u64, u64), anyhow::Error> {
+    Ok((
+        split_creator_fee(pool.creator_fees_token0, share_rate)?.0,
+        split_creator_fee(pool.creator_fees_token1, share_rate)?.0,
+    ))
 }

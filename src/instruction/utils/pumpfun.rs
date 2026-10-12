@@ -4,7 +4,6 @@
 
 use crate::common::{bonding_curve::BondingCurveAccount, SolanaRpcClient};
 use anyhow::anyhow;
-use borsh::BorshDeserialize;
 use rand::seq::IndexedRandom;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -156,11 +155,12 @@ pub mod accounts {
             is_writable: false,
         };
 
+    /// IDL `buy` / `buy_exact_sol_in` index 12: readonly.
     pub const GLOBAL_VOLUME_ACCUMULATOR_META: solana_sdk::instruction::AccountMeta =
         solana_sdk::instruction::AccountMeta {
             pubkey: GLOBAL_VOLUME_ACCUMULATOR,
             is_signer: false,
-            is_writable: true,
+            is_writable: false,
         };
 
     pub const FEE_CONFIG_META: solana_sdk::instruction::AccountMeta =
@@ -190,6 +190,7 @@ pub const BUY_EXACT_QUOTE_IN_V2_DISCRIMINATOR: [u8; 8] = [194, 171, 28, 70, 104,
 pub const EXTEND_ACCOUNT_DISCRIMINATOR: [u8; 8] = [234, 102, 194, 203, 150, 72, 62, 229];
 
 pub const SHARING_CONFIG_ACCOUNT_DISCRIMINATOR: [u8; 8] = [216, 74, 9, 0, 56, 140, 93, 75];
+pub const GLOBAL_ACCOUNT_DISCRIMINATOR: [u8; 8] = [167, 232, 232, 177, 200, 108, 114, 127];
 
 pub(crate) const SHARING_CONFIG_STATUS_ACTIVE: u8 = 1;
 
@@ -200,6 +201,10 @@ pub fn is_mayhem_fee_recipient(pubkey: &Pubkey) -> bool {
     global_constants::MAYHEM_FEE_RECIPIENTS.contains(pubkey)
 }
 
+/// Historical name: these keys are **Normal Fee Recipients #1–7** in
+/// pump-public-docs `FEE_RECIPIENTS.md` (together with `FEE_RECIPIENT` = #0).
+/// They are valid for non-mayhem bonding-curve buy/sell — do NOT treat as
+/// PumpSwap-only / reject on bonding curve.
 #[inline]
 pub fn is_amm_fee_recipient(pubkey: &Pubkey) -> bool {
     pubkey == &global_constants::PUMPFUN_AMM_FEE_1
@@ -209,6 +214,11 @@ pub fn is_amm_fee_recipient(pubkey: &Pubkey) -> bool {
         || pubkey == &global_constants::PUMPFUN_AMM_FEE_5
         || pubkey == &global_constants::PUMPFUN_AMM_FEE_6
         || pubkey == &global_constants::PUMPFUN_AMM_FEE_7
+}
+
+#[inline]
+pub fn is_normal_fee_recipient(pubkey: &Pubkey) -> bool {
+    is_standard_bonding_fee_recipient(pubkey) || is_amm_fee_recipient(pubkey)
 }
 
 #[inline]
@@ -243,12 +253,13 @@ pub fn reconcile_mayhem_mode_for_trade(
 #[inline]
 pub fn fee_recipient_ok_for_bonding_curve_mode(pk: &Pubkey, is_mayhem_mode: bool) -> bool {
     let is_m = is_mayhem_fee_recipient(pk);
-    let is_amm = is_amm_fee_recipient(pk);
-    let is_s = is_standard_bonding_fee_recipient(pk);
+    let is_normal = is_normal_fee_recipient(pk);
     if is_mayhem_mode {
-        is_m || (!is_s && !is_amm && *pk != Pubkey::default())
+        // Mayhem: reserved pool, or unknown non-normal key (Global rotation).
+        is_m || (!is_normal && *pk != Pubkey::default())
     } else {
-        is_s || (!is_m && !is_amm && *pk != Pubkey::default())
+        // Official FEE_RECIPIENTS.md: Normal #0–7 are all valid for non-mayhem.
+        is_normal || (!is_m && *pk != Pubkey::default())
     }
 }
 
@@ -473,6 +484,37 @@ pub fn get_buy_price(
 // --- RPC -------------------------------------------------------------
 
 #[inline]
+pub(crate) fn decode_global_fee_recipient(data: &[u8]) -> Result<Pubkey, anyhow::Error> {
+    const FEE_RECIPIENT_OFFSET: usize = 8 + 1 + 32;
+    const FEE_RECIPIENT_END: usize = FEE_RECIPIENT_OFFSET + 32;
+
+    if data.len() < FEE_RECIPIENT_END {
+        return Err(anyhow!(
+            "PumpFun Global account is too short: expected at least {FEE_RECIPIENT_END} bytes, got {}",
+            data.len()
+        ));
+    }
+    if data[..8] != GLOBAL_ACCOUNT_DISCRIMINATOR {
+        return Err(anyhow!("Invalid PumpFun Global account discriminator"));
+    }
+
+    Ok(Pubkey::new_from_array(
+        data[FEE_RECIPIENT_OFFSET..FEE_RECIPIENT_END]
+            .try_into()
+            .map_err(|_| anyhow!("PumpFun Global fee recipient slice"))?,
+    ))
+}
+
+#[inline]
+pub async fn fetch_global_fee_recipient(rpc: &SolanaRpcClient) -> Result<Pubkey, anyhow::Error> {
+    let account = rpc.get_account(&global_constants::GLOBAL_ACCOUNT).await?;
+    if account.owner != accounts::PUMPFUN {
+        return Err(anyhow!("PumpFun Global account has unexpected owner {}", account.owner));
+    }
+    decode_global_fee_recipient(&account.data)
+}
+
+#[inline]
 pub async fn fetch_fee_sharing_creator_vault_if_active(
     rpc: &SolanaRpcClient,
     mint: &Pubkey,
@@ -520,8 +562,10 @@ pub async fn fetch_bonding_curve_account(
     // (from on-chain schema additions like new fields) are silently ignored.
     // `try_from_slice` requires the entire slice to be consumed, causing
     // "Not all bytes read" when the account has been extended.
-    let mut bonding_curve = BondingCurveAccount::deserialize(&mut &account.data[8..])
-        .map_err(|e| anyhow::anyhow!("Failed to decode bonding curve account: {}", e))?;
+    let mut bonding_curve = BondingCurveAccount::decode_body(
+        account.data.get(8..).ok_or_else(|| anyhow::anyhow!("short bonding curve account"))?,
+    )
+    .ok_or_else(|| anyhow::anyhow!("Failed to decode bonding curve account"))?;
     bonding_curve.account = bonding_curve_pda;
 
     Ok((Arc::new(bonding_curve), bonding_curve_pda))
@@ -544,6 +588,27 @@ mod tests {
         assert_eq!(BUY_V2_DISCRIMINATOR.len(), 8);
         assert_eq!(SELL_V2_DISCRIMINATOR.len(), 8);
         assert_eq!(BUY_EXACT_QUOTE_IN_V2_DISCRIMINATOR.len(), 8);
+        assert_eq!(GLOBAL_ACCOUNT_DISCRIMINATOR.len(), 8);
+    }
+
+    #[test]
+    fn decodes_global_fee_recipient_from_account_prefix() {
+        let expected = Pubkey::new_unique();
+        let mut data = vec![0_u8; 73];
+        data[..8].copy_from_slice(&GLOBAL_ACCOUNT_DISCRIMINATOR);
+        data[8] = 1;
+        data[41..73].copy_from_slice(expected.as_ref());
+
+        assert_eq!(decode_global_fee_recipient(&data).unwrap(), expected);
+    }
+
+    #[test]
+    fn rejects_invalid_global_account_data() {
+        assert!(decode_global_fee_recipient(&[0_u8; 72]).is_err());
+
+        let mut data = vec![0_u8; 73];
+        data[8] = 1;
+        assert!(decode_global_fee_recipient(&data).is_err());
     }
 
     #[test]
@@ -726,10 +791,11 @@ mod tests {
     }
 
     #[test]
-    fn pump_fee_meta_rejects_amm_fee_for_standard_ix() {
+    fn pump_fee_meta_accepts_normal_fee_pool_member_for_standard_ix() {
+        // Official FEE_RECIPIENTS.md Normal #7 — valid for non-mayhem bonding curve.
         let fee = global_constants::PUMPFUN_AMM_FEE_7;
         let m = pump_fun_fee_recipient_meta(fee, false);
-        assert_eq!(m.pubkey, global_constants::FEE_RECIPIENT);
+        assert_eq!(m.pubkey, fee);
         assert!(m.is_writable);
         assert!(!m.is_signer);
     }

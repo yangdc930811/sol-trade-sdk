@@ -12,6 +12,11 @@ pub use crate::common::nonce_cache::{fetch_nonce_info, DurableNonceInfo};
 pub use crate::swqos::{AstralaneTransport, SwqosTransport};
 pub use client::{
     find_pool_by_mint, recommended_sender_thread_core_indices, AccountPolicy, BuyAmount,
-    SellAmount, SimpleBuyParams, SimpleSellParams, SolanaTrade, TradeBuyParams, TradeSellParams,
-    TradeTokenType, TradingClient, TradingInfrastructure,
+    SellAmount, SimpleBuyParams, SimpleSellParams, SolanaTrade, TradeBuyParams, TradeRiskGate,
+    TradeSellParams, TradeTokenType, TradingClient, TradingInfrastructure,
+};
+pub use trading::core::params::{
+    StonkFunMemeLeg, StonkFunParams, StonkFunQuoteHop, StonkFunQuoteHopPreview, StonkFunQuoteRoute,
+    StonkFunQuoteRoutePreview, StonkFunQuoteVenue, StonkFunSolHop, StonkFunSwapParams,
+    StonkFunViaQuoteParams, StonkFunViaSolParams,
 };

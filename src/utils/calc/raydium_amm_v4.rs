@@ -2,6 +2,8 @@ use crate::instruction::utils::raydium_amm_v4::accounts::{
     SWAP_FEE_DENOMINATOR, SWAP_FEE_NUMERATOR, TRADE_FEE_DENOMINATOR, TRADE_FEE_NUMERATOR,
 };
 
+use super::common::calculate_min_amount_out;
+
 /// Computes trading fee using ceiling division.
 ///
 /// # Arguments
@@ -91,7 +93,9 @@ fn swap_base_input(
         / (input_vault_amount as u128).saturating_add(input_amount_less_fees as u128))
         as u64;
 
-    let output_amount = output_amount_swapped.saturating_sub(swap_fee);
+    // Official Raydium AMM V4: trade fee is taken from input; do not subtract
+    // input-denominated swap_fee from output units (matches router quote.rs).
+    let output_amount = output_amount_swapped;
 
     SwapResult {
         new_input_vault_amount: input_vault_amount.saturating_add(input_amount_less_fees),
@@ -135,8 +139,7 @@ pub fn compute_swap_amount(
         SWAP_FEE_NUMERATOR,
     );
 
-    let min_amount_out = ((swap_result.output_amount as f64)
-        * (1.0 - (slippage_basis_points as f64) / 10000.0)) as u64;
+    let min_amount_out = calculate_min_amount_out(swap_result.output_amount, slippage_basis_points);
 
     let all_trade = swap_result.input_amount == amount_in;
 
@@ -146,5 +149,71 @@ pub fn compute_swap_amount(
         amount_out: swap_result.output_amount,
         min_amount_out,
         fee: swap_result.trade_fee,
+    }
+}
+
+/// Current v2 no-orderbook quote using the AMM's actual swap fee configuration.
+pub fn compute_swap_amount_for_pool(
+    pool: &crate::trading::core::params::RaydiumAmmV4Params,
+    is_coin_in: bool,
+    amount_in: u64,
+    slippage: u64,
+) -> anyhow::Result<ComputeSwapParams> {
+    anyhow::ensure!(
+        pool.swap_fee_denominator > 0 && pool.swap_fee_numerator < pool.swap_fee_denominator,
+        "Invalid AMM v4 swap fee"
+    );
+    let (input, output) = if is_coin_in {
+        (pool.coin_reserve, pool.pc_reserve)
+    } else {
+        (pool.pc_reserve, pool.coin_reserve)
+    };
+    anyhow::ensure!(input > 0 && output > 0, "AMM v4 reserves are empty");
+    let fee = (u128::from(amount_in) * u128::from(pool.swap_fee_numerator))
+        .div_ceil(u128::from(pool.swap_fee_denominator)) as u64;
+    let net = amount_in - fee;
+    let out = (u128::from(output) * u128::from(net) / (u128::from(input) + u128::from(net))) as u64;
+    Ok(ComputeSwapParams {
+        all_trade: true,
+        amount_in,
+        amount_out: out,
+        min_amount_out: calculate_min_amount_out(out, slippage),
+        fee,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::calc::common::{calculate_min_amount_out, MAX_SLIPPAGE_BASIS_POINTS};
+
+    #[test]
+    fn min_amount_out_uses_exact_integer_slippage() {
+        let no_slippage = compute_swap_amount(u64::MAX, u64::MAX, true, u64::MAX, 0);
+        let one_percent = compute_swap_amount(u64::MAX, u64::MAX, true, u64::MAX, 100);
+
+        assert_eq!(one_percent.amount_out, no_slippage.amount_out);
+        assert_eq!(
+            one_percent.min_amount_out,
+            calculate_min_amount_out(one_percent.amount_out, 100)
+        );
+    }
+
+    #[test]
+    fn min_amount_out_rounds_down_after_applying_slippage() {
+        assert_eq!(calculate_min_amount_out(101, 100), 99);
+    }
+
+    #[test]
+    fn excessive_slippage_is_clamped_without_underflow() {
+        let excessive = compute_swap_amount(1_000_000, 2_000_000, true, 100_000, u64::MAX);
+        let clamped =
+            compute_swap_amount(1_000_000, 2_000_000, true, 100_000, MAX_SLIPPAGE_BASIS_POINTS);
+
+        assert_eq!(excessive.min_amount_out, clamped.min_amount_out);
+        assert_eq!(
+            excessive.min_amount_out,
+            calculate_min_amount_out(excessive.amount_out, MAX_SLIPPAGE_BASIS_POINTS)
+        );
     }
 }

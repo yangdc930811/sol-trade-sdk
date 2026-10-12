@@ -6,14 +6,14 @@ use crate::{
             push_create_user_token_account,
         },
         utils::raydium_amm_v4::{
-            accounts, SWAP_BASE_IN_DISCRIMINATOR, SWAP_BASE_OUT_DISCRIMINATOR,
+            accounts, SWAP_BASE_IN_V2_DISCRIMINATOR, SWAP_BASE_OUT_V2_DISCRIMINATOR,
         },
     },
     trading::core::{
         params::{RaydiumAmmV4Params, SwapParams},
         traits::InstructionBuilder,
     },
-    utils::calc::raydium_amm_v4::compute_swap_amount,
+    utils::calc::raydium_amm_v4::compute_swap_amount_for_pool,
 };
 use anyhow::{anyhow, Result};
 use solana_sdk::{
@@ -25,29 +25,56 @@ use solana_sdk::{
 /// Instruction builder for RaydiumCpmm protocol
 pub struct RaydiumAmmV4InstructionBuilder;
 
-fn ensure_market_accounts(params: &RaydiumAmmV4Params) -> Result<()> {
-    let required = [
-        ("amm_open_orders", params.amm_open_orders),
-        ("amm_target_orders", params.amm_target_orders),
-        ("serum_program", params.serum_program),
-        ("serum_market", params.serum_market),
-        ("serum_bids", params.serum_bids),
-        ("serum_asks", params.serum_asks),
-        ("serum_event_queue", params.serum_event_queue),
-        ("serum_coin_vault_account", params.serum_coin_vault_account),
-        ("serum_pc_vault_account", params.serum_pc_vault_account),
-        ("serum_vault_signer", params.serum_vault_signer),
-    ];
+fn build_swap_accounts(
+    protocol_params: &RaydiumAmmV4Params,
+    user_source: Pubkey,
+    user_destination: Pubkey,
+    payer: Pubkey,
+) -> Vec<AccountMeta> {
+    // Official Raydium 2026-07-22 + raydium-sdk-V2: always SwapBaseIn/Out V2.
+    // Owner is signer-only (`isWritable: false`).
+    vec![
+        crate::constants::TOKEN_PROGRAM_META,
+        AccountMeta::new(protocol_params.amm, false),
+        accounts::AUTHORITY_META,
+        AccountMeta::new(protocol_params.token_coin, false),
+        AccountMeta::new(protocol_params.token_pc, false),
+        AccountMeta::new(user_source, false),
+        AccountMeta::new(user_destination, false),
+        AccountMeta::new_readonly(payer, true),
+    ]
+}
 
-    for (name, account) in required {
-        if account == Pubkey::default() {
-            return Err(anyhow!(
-                "Raydium AMM v4 requires {}; use RaydiumAmmV4Params::from_amm_address_by_rpc or with_market_accounts",
-                name
-            ));
+fn resolve_swap_pair(
+    params: &SwapParams,
+    pool: &RaydiumAmmV4Params,
+) -> Result<(Pubkey, Pubkey, bool)> {
+    let normalize = |mint| {
+        if mint == crate::constants::SOL_TOKEN_ACCOUNT {
+            crate::constants::WSOL_TOKEN_ACCOUNT
+        } else {
+            mint
+        }
+    };
+    let input = normalize(params.input_mint);
+    let output = normalize(params.output_mint);
+    for program in [params.input_token_program, params.output_token_program].into_iter().flatten() {
+        if program != crate::constants::TOKEN_PROGRAM {
+            return Err(anyhow!("AMM v4 requires the SPL Token program"));
         }
     }
-    Ok(())
+    let coin_in = if input == pool.coin_mint && output == pool.pc_mint {
+        true
+    } else if input == pool.pc_mint && output == pool.coin_mint {
+        false
+    } else {
+        return Err(anyhow!("AMM v4 swap pair does not match pool"));
+    };
+    Ok((input, output, coin_in))
+}
+
+fn swap_discriminators() -> (&'static [u8], &'static [u8]) {
+    (SWAP_BASE_IN_V2_DISCRIMINATOR, SWAP_BASE_OUT_V2_DISCRIMINATOR)
 }
 
 #[async_trait::async_trait]
@@ -64,29 +91,9 @@ impl InstructionBuilder for RaydiumAmmV4InstructionBuilder {
             .as_any()
             .downcast_ref::<RaydiumAmmV4Params>()
             .ok_or_else(|| anyhow!("Invalid protocol params for RaydiumAmmV4"))?;
-        ensure_market_accounts(protocol_params)?;
 
-        let is_wsol = protocol_params.coin_mint == crate::constants::WSOL_TOKEN_ACCOUNT
-            || protocol_params.pc_mint == crate::constants::WSOL_TOKEN_ACCOUNT;
-
-        let is_usdc = protocol_params.coin_mint == crate::constants::USDC_TOKEN_ACCOUNT
-            || protocol_params.pc_mint == crate::constants::USDC_TOKEN_ACCOUNT;
-
-        if !is_wsol && !is_usdc {
-            return Err(anyhow!("Pool must contain WSOL or USDC"));
-        }
-
-        // ========================================
-        // Trade calculation and account address preparation
-        // ========================================
-        let is_base_in = protocol_params.coin_mint == crate::constants::WSOL_TOKEN_ACCOUNT
-            || protocol_params.coin_mint == crate::constants::USDC_TOKEN_ACCOUNT;
-        let amount_in: u64 = params.input_amount.unwrap_or(0);
-        let input_mint =
-            if is_base_in { protocol_params.coin_mint } else { protocol_params.pc_mint };
-        let output_mint =
-            if is_base_in { protocol_params.pc_mint } else { protocol_params.coin_mint };
-
+        let (input_mint, output_mint, is_base_in) = resolve_swap_pair(params, protocol_params)?;
+        let amount_in = params.input_amount.unwrap_or(0);
         let user_source_token_account =
             crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
                 &params.payer.pubkey(),
@@ -129,51 +136,33 @@ impl InstructionBuilder for RaydiumAmmV4InstructionBuilder {
         }
 
         // Create buy instruction
-        let accounts: [AccountMeta; 18] = [
-            crate::constants::TOKEN_PROGRAM_META, // Token Program (readonly)
-            AccountMeta::new(protocol_params.amm, false), // Amm
-            accounts::AUTHORITY_META,             // Authority (readonly)
-            AccountMeta::new(protocol_params.amm_open_orders, false), // Amm Open Orders
-            AccountMeta::new(protocol_params.amm_target_orders, false), // Amm Target Orders
-            AccountMeta::new(protocol_params.token_coin, false), // Pool Coin Token Account
-            AccountMeta::new(protocol_params.token_pc, false), // Pool Pc Token Account
-            AccountMeta::new_readonly(protocol_params.serum_program, false), // Serum Program
-            AccountMeta::new(protocol_params.serum_market, false), // Serum Market
-            AccountMeta::new(protocol_params.serum_bids, false), // Serum Bids
-            AccountMeta::new(protocol_params.serum_asks, false), // Serum Asks
-            AccountMeta::new(protocol_params.serum_event_queue, false), // Serum Event Queue
-            AccountMeta::new(protocol_params.serum_coin_vault_account, false), // Serum Coin Vault Account
-            AccountMeta::new(protocol_params.serum_pc_vault_account, false), // Serum Pc Vault Account
-            AccountMeta::new_readonly(protocol_params.serum_vault_signer, false), // Serum Vault Signer
-            AccountMeta::new(user_source_token_account, false), // User Source Token Account
-            AccountMeta::new(user_destination_token_account, false), // User Destination Token Account
-            AccountMeta::new(params.payer.pubkey(), true),           // User Source Owner
-        ];
+        let accounts = build_swap_accounts(
+            protocol_params,
+            user_source_token_account,
+            user_destination_token_account,
+            params.payer.pubkey(),
+        );
+        let (disc_in, disc_out) = swap_discriminators();
         // Create instruction data
         let mut data = [0u8; 17];
         if let Some(amount_out) = params.fixed_output_amount {
-            data[..1].copy_from_slice(&SWAP_BASE_OUT_DISCRIMINATOR);
+            data[..1].copy_from_slice(disc_out);
             data[1..9].copy_from_slice(&amount_in.to_le_bytes());
             data[9..17].copy_from_slice(&amount_out.to_le_bytes());
         } else {
-            let minimum_amount_out = compute_swap_amount(
-                protocol_params.coin_reserve,
-                protocol_params.pc_reserve,
+            let minimum_amount_out = compute_swap_amount_for_pool(
+                protocol_params,
                 is_base_in,
                 amount_in,
                 params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
-            )
+            )?
             .min_amount_out;
-            data[..1].copy_from_slice(&SWAP_BASE_IN_DISCRIMINATOR);
+            data[..1].copy_from_slice(disc_in);
             data[1..9].copy_from_slice(&amount_in.to_le_bytes());
             data[9..17].copy_from_slice(&minimum_amount_out.to_le_bytes());
         }
 
-        instructions.push(Instruction::new_with_bytes(
-            accounts::RAYDIUM_AMM_V4,
-            &data,
-            accounts.to_vec(),
-        ));
+        instructions.push(Instruction::new_with_bytes(accounts::RAYDIUM_AMM_V4, &data, accounts));
 
         if params.close_input_mint_ata {
             push_close_wsol_if_needed(&mut instructions, &params.payer.pubkey(), &input_mint);
@@ -191,32 +180,14 @@ impl InstructionBuilder for RaydiumAmmV4InstructionBuilder {
             .as_any()
             .downcast_ref::<RaydiumAmmV4Params>()
             .ok_or_else(|| anyhow!("Invalid protocol params for RaydiumAmmV4"))?;
-        ensure_market_accounts(protocol_params)?;
 
         if params.input_amount.is_none() || params.input_amount.unwrap_or(0) == 0 {
             return Err(anyhow!("Token amount is not set"));
         }
 
-        let is_wsol = protocol_params.coin_mint == crate::constants::WSOL_TOKEN_ACCOUNT
-            || protocol_params.pc_mint == crate::constants::WSOL_TOKEN_ACCOUNT;
+        let (input_mint, output_mint, is_base_in) = resolve_swap_pair(params, protocol_params)?;
 
-        let is_usdc = protocol_params.coin_mint == crate::constants::USDC_TOKEN_ACCOUNT
-            || protocol_params.pc_mint == crate::constants::USDC_TOKEN_ACCOUNT;
-
-        if !is_wsol && !is_usdc {
-            return Err(anyhow!("Pool must contain WSOL or USDC"));
-        }
-
-        // ========================================
-        // Trade calculation and account address preparation
-        // ========================================
-        let is_base_in = protocol_params.pc_mint == crate::constants::WSOL_TOKEN_ACCOUNT
-            || protocol_params.pc_mint == crate::constants::USDC_TOKEN_ACCOUNT;
-        let input_mint =
-            if is_base_in { protocol_params.coin_mint } else { protocol_params.pc_mint };
-        let output_mint =
-            if is_base_in { protocol_params.pc_mint } else { protocol_params.coin_mint };
-
+        let amount_in = params.input_amount.unwrap();
         let user_source_token_account =
             crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
                 &params.payer.pubkey(),
@@ -232,10 +203,18 @@ impl InstructionBuilder for RaydiumAmmV4InstructionBuilder {
                 params.open_seed_optimize,
             );
 
-        // ========================================
-        // Build instructions
-        // ========================================
-        let mut instructions = Vec::with_capacity(4);
+        let mut instructions = Vec::with_capacity(6);
+
+        if params.create_input_mint_ata {
+            push_create_or_wrap_user_token_account(
+                &mut instructions,
+                &params.payer.pubkey(),
+                &input_mint,
+                &crate::constants::TOKEN_PROGRAM,
+                amount_in,
+                params.open_seed_optimize,
+            );
+        }
 
         if params.create_output_mint_ata {
             push_create_user_token_account(
@@ -247,53 +226,32 @@ impl InstructionBuilder for RaydiumAmmV4InstructionBuilder {
             );
         }
 
-        // Create buy instruction
-        let accounts: [AccountMeta; 18] = [
-            crate::constants::TOKEN_PROGRAM_META, // Token Program (readonly)
-            AccountMeta::new(protocol_params.amm, false), // Amm
-            accounts::AUTHORITY_META,             // Authority (readonly)
-            AccountMeta::new(protocol_params.amm_open_orders, false), // Amm Open Orders
-            AccountMeta::new(protocol_params.amm_target_orders, false), // Amm Target Orders
-            AccountMeta::new(protocol_params.token_coin, false), // Pool Coin Token Account
-            AccountMeta::new(protocol_params.token_pc, false), // Pool Pc Token Account
-            AccountMeta::new_readonly(protocol_params.serum_program, false), // Serum Program
-            AccountMeta::new(protocol_params.serum_market, false), // Serum Market
-            AccountMeta::new(protocol_params.serum_bids, false), // Serum Bids
-            AccountMeta::new(protocol_params.serum_asks, false), // Serum Asks
-            AccountMeta::new(protocol_params.serum_event_queue, false), // Serum Event Queue
-            AccountMeta::new(protocol_params.serum_coin_vault_account, false), // Serum Coin Vault Account
-            AccountMeta::new(protocol_params.serum_pc_vault_account, false), // Serum Pc Vault Account
-            AccountMeta::new_readonly(protocol_params.serum_vault_signer, false), // Serum Vault Signer
-            AccountMeta::new(user_source_token_account, false), // User Source Token Account
-            AccountMeta::new(user_destination_token_account, false), // User Destination Token Account
-            AccountMeta::new(params.payer.pubkey(), true),           // User Source Owner
-        ];
-        // Create instruction data
+        let accounts = build_swap_accounts(
+            protocol_params,
+            user_source_token_account,
+            user_destination_token_account,
+            params.payer.pubkey(),
+        );
+        let (disc_in, disc_out) = swap_discriminators();
         let mut data = [0u8; 17];
-        let amount_in = params.input_amount.unwrap_or(0);
         if let Some(amount_out) = params.fixed_output_amount {
-            data[..1].copy_from_slice(&SWAP_BASE_OUT_DISCRIMINATOR);
+            data[..1].copy_from_slice(disc_out);
             data[1..9].copy_from_slice(&amount_in.to_le_bytes());
             data[9..17].copy_from_slice(&amount_out.to_le_bytes());
         } else {
-            let minimum_amount_out = compute_swap_amount(
-                protocol_params.coin_reserve,
-                protocol_params.pc_reserve,
+            let minimum_amount_out = compute_swap_amount_for_pool(
+                protocol_params,
                 is_base_in,
                 amount_in,
                 params.slippage_basis_points.unwrap_or(DEFAULT_SLIPPAGE),
-            )
+            )?
             .min_amount_out;
-            data[..1].copy_from_slice(&SWAP_BASE_IN_DISCRIMINATOR);
+            data[..1].copy_from_slice(disc_in);
             data[1..9].copy_from_slice(&amount_in.to_le_bytes());
             data[9..17].copy_from_slice(&minimum_amount_out.to_le_bytes());
         }
 
-        instructions.push(Instruction::new_with_bytes(
-            accounts::RAYDIUM_AMM_V4,
-            &data,
-            accounts.to_vec(),
-        ));
+        instructions.push(Instruction::new_with_bytes(accounts::RAYDIUM_AMM_V4, &data, accounts));
 
         if params.close_output_mint_ata {
             push_close_wsol_if_needed(&mut instructions, &params.payer.pubkey(), &output_mint);
@@ -388,33 +346,27 @@ mod tests {
             max_sender_concurrency: 0,
             effective_core_ids: Arc::new(Vec::new()),
             check_min_tip: false,
+            transaction_version: crate::common::TradeTransactionVersion::V0,
             grpc_recv_us: None,
             use_exact_sol_amount: None,
         }
     }
 
     #[tokio::test]
-    async fn raydium_amm_v4_uses_idl_market_account_order() {
+    async fn raydium_amm_v4_always_uses_swap_v2_layout() {
         let instructions = RaydiumAmmV4InstructionBuilder
             .build_buy_instructions(&swap_params(market_params(), None))
             .await
             .unwrap();
         let ix = instructions.last().unwrap();
 
-        assert_eq!(ix.accounts.len(), 18);
-        assert_eq!(&ix.data[..1], SWAP_BASE_IN_DISCRIMINATOR);
-        assert_eq!(ix.accounts[3].pubkey, pk(5));
-        assert_eq!(ix.accounts[4].pubkey, pk(6));
-        assert_eq!(ix.accounts[7].pubkey, pk(7));
-        assert_eq!(ix.accounts[8].pubkey, pk(8));
-        assert_eq!(ix.accounts[9].pubkey, pk(9));
-        assert_eq!(ix.accounts[10].pubkey, pk(10));
-        assert_eq!(ix.accounts[11].pubkey, pk(11));
-        assert_eq!(ix.accounts[12].pubkey, pk(12));
-        assert_eq!(ix.accounts[13].pubkey, pk(13));
-        assert_eq!(ix.accounts[14].pubkey, pk(14));
-        assert!(!ix.accounts[7].is_writable);
-        assert!(!ix.accounts[14].is_writable);
+        // Official 2026-07-22: routers always use V2 (8 accounts), even if OpenBook keys present.
+        assert_eq!(ix.accounts.len(), 8);
+        assert_eq!(&ix.data[..1], SWAP_BASE_IN_V2_DISCRIMINATOR);
+        assert_eq!(ix.accounts[3].pubkey, pk(3)); // coin vault from Params::new
+        assert_eq!(ix.accounts[4].pubkey, pk(4)); // pc vault
+        assert!(ix.accounts[7].is_signer);
+        assert!(!ix.accounts[7].is_writable); // raydium-sdk-V2: owner readonly signer
     }
 
     #[tokio::test]
@@ -425,29 +377,32 @@ mod tests {
             .unwrap();
         let ix = instructions.last().unwrap();
 
-        assert_eq!(&ix.data[..1], SWAP_BASE_OUT_DISCRIMINATOR);
+        assert_eq!(&ix.data[..1], SWAP_BASE_OUT_V2_DISCRIMINATOR);
         assert_eq!(u64::from_le_bytes(ix.data[1..9].try_into().unwrap()), 100_000);
         assert_eq!(u64::from_le_bytes(ix.data[9..17].try_into().unwrap()), 42);
     }
 
     #[tokio::test]
-    async fn raydium_amm_v4_rejects_placeholder_market_accounts() {
-        let err = RaydiumAmmV4InstructionBuilder
-            .build_buy_instructions(&swap_params(
-                RaydiumAmmV4Params::new(
-                    pk(1),
-                    crate::constants::WSOL_TOKEN_ACCOUNT,
-                    pk(2),
-                    pk(3),
-                    pk(4),
-                    1_000_000_000,
-                    2_000_000_000,
-                ),
-                None,
-            ))
+    async fn raydium_amm_v4_swap_v2_when_openbook_accounts_absent() {
+        let params = RaydiumAmmV4Params::new(
+            pk(1),
+            crate::constants::WSOL_TOKEN_ACCOUNT,
+            pk(2),
+            pk(3),
+            pk(4),
+            1_000_000_000,
+            2_000_000_000,
+        );
+        let instructions = RaydiumAmmV4InstructionBuilder
+            .build_buy_instructions(&swap_params(params, None))
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("amm_open_orders"));
+            .unwrap();
+        let ix = instructions.last().unwrap();
+        assert_eq!(ix.accounts.len(), 8);
+        assert_eq!(&ix.data[..1], SWAP_BASE_IN_V2_DISCRIMINATOR);
+        assert_eq!(ix.accounts[3].pubkey, pk(3)); // coin vault
+        assert_eq!(ix.accounts[4].pubkey, pk(4)); // pc vault
+        assert!(!ix.accounts[7].is_writable);
     }
 
     #[tokio::test]
@@ -466,5 +421,33 @@ mod tests {
 
         assert_eq!(create_ix.program_id, crate::constants::ASSOCIATED_TOKEN_PROGRAM_ID);
         assert_eq!(create_ix.accounts[3].pubkey, crate::constants::USDC_TOKEN_ACCOUNT);
+    }
+    #[tokio::test]
+    async fn amm_v4_direction_follows_requested_pair_including_reverse_buy() {
+        let pool = market_params();
+        let mut params = swap_params(pool.clone(), None);
+        params.input_mint = pool.pc_mint;
+        params.output_mint = pool.coin_mint;
+        let ixs = RaydiumAmmV4InstructionBuilder.build_buy_instructions(&params).await.unwrap();
+        let ix = ixs.iter().find(|ix| ix.program_id == accounts::RAYDIUM_AMM_V4).unwrap();
+        let expected =
+            crate::common::fast_fn::get_associated_token_address_with_program_id_fast_use_seed(
+                &params.payer.pubkey(),
+                &pool.pc_mint,
+                &crate::constants::TOKEN_PROGRAM,
+                params.open_seed_optimize,
+            );
+        assert_eq!(ix.accounts[5].pubkey, expected);
+        let minimum = crate::utils::calc::raydium_amm_v4::compute_swap_amount(
+            pool.coin_reserve,
+            pool.pc_reserve,
+            false,
+            params.input_amount.unwrap(),
+            params.slippage_basis_points.unwrap(),
+        )
+        .min_amount_out;
+        assert_eq!(u64::from_le_bytes(ix.data[9..17].try_into().unwrap()), minimum);
+        params.output_mint = Pubkey::new_unique();
+        assert!(RaydiumAmmV4InstructionBuilder.build_buy_instructions(&params).await.is_err());
     }
 }

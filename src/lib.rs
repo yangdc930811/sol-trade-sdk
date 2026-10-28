@@ -17,9 +17,12 @@ pub use client::{
     TradingInfrastructure,
 };
 pub use trading::core::params::{
+    PumpFunQuoteHop, PumpFunQuoteRoute, PumpFunQuoteVenue, PumpFunV3Params,
     PreparedPumpSwapTrade, PumpSwapQuoteHop, PumpSwapQuoteRoute, PumpSwapQuoteVenue,
     PumpSwapRouteRejection, PumpSwapRouteSearch, PumpSwapRouteSelection, StonkFunMemeLeg,
     StonkFunParams, StonkFunQuoteHop, StonkFunQuoteHopPreview, StonkFunQuoteRoute,
     StonkFunQuoteRoutePreview, StonkFunQuoteVenue, StonkFunSolHop, StonkFunSwapParams,
     StonkFunViaQuoteParams, StonkFunViaSolParams,
 };
+pub use common::PumpFunVersion;
+pub use instruction::pump_route::{PumpRouteExecution, PumpRouteOptions};
